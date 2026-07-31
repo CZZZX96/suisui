@@ -672,7 +672,25 @@
     if (item) openLightbox(s2.media[+item.dataset.i]);
   });
 
-  function addComposeMedia(desc) { s2.media.push(desc); renderTray(); }
+  function addComposeMedia(desc) {
+    if (!desc) return;
+    // 视频单条限制：若已有视频，则替换之
+    if (desc.kind === 'video') {
+      const existingIdx = s2.media.findIndex((m) => m && m.kind === 'video');
+      if (existingIdx >= 0) {
+        const old = s2.media[existingIdx];
+        if (old && old.mediaId) SuiDB.deleteMedia(old.mediaId);
+        s2.media[existingIdx] = desc;
+        renderTray();
+        toast('已替换原视频');
+        return;
+      }
+    }
+    s2.media.push(desc);
+    renderTray();
+  }
+  // 当前手记是否已有视频（用于录制界面顶部提示）
+  function noteHasVideo() { return s2.media.some((m) => m && m.kind === 'video'); }
 
   /* ============ T4 放大查看（lightbox） ============ */
   function openLightbox(m) {
@@ -697,20 +715,65 @@
 
   /* ============ T5 照片裁剪（手记内） ============ */
   let noteCropState = { scale: 1, tx: 0, ty: 0 }, cropBaseScale = 1, cropImgEl = null, cropTargetIndex = -1;
+  let cropRatio = 'free'; // 当前比例：free / 1:1 / 4:3 / 3:4 / 16:9
+  let cropRatioPending = null; // 图片未加载时点击比例按钮，延迟应用
   const cropVP = $('#cropViewport');
+  const cropRatiosEl = $('#cropRatios');
+  function applyRatioToVP(r) {
+    if (!cropVP) return;
+    if (r === 'free') {
+      if (cropImgEl && cropImgEl.complete && cropImgEl.naturalWidth) {
+        cropVP.style.aspectRatio = `${cropImgEl.naturalWidth} / ${cropImgEl.naturalHeight}`;
+      } else {
+        cropVP.style.aspectRatio = 'auto';
+      }
+    } else {
+      const [w, h] = r.split(':').map(Number);
+      cropVP.style.aspectRatio = `${w} / ${h}`;
+    }
+  }
+  function setCropRatio(r) {
+    cropRatio = r;
+    if (cropRatiosEl) {
+      cropRatiosEl.querySelectorAll('.crop-ratio').forEach((b) => {
+        b.classList.toggle('is-active', b.dataset.ratio === r);
+      });
+    }
+    if (!cropImgEl || !cropImgEl.complete || !cropImgEl.naturalWidth) {
+      cropRatioPending = r; // 图片未就绪，延后应用
+      return;
+    }
+    applyRatioToVP(r);
+    fitCropImage();
+  }
+  function fitCropImage() {
+    if (!cropImgEl || !cropImgEl.naturalWidth) return;
+    const vp = cropVP.getBoundingClientRect();
+    if (!vp.width || !vp.height) return;
+    const iw = cropImgEl.naturalWidth, ih = cropImgEl.naturalHeight;
+    cropBaseScale = Math.min(vp.width / iw, vp.height / ih) || 1;
+    cropImgEl.style.width = Math.round(iw * cropBaseScale) + 'px';
+    cropImgEl.style.height = Math.round(ih * cropBaseScale) + 'px';
+    applyCropTransform();
+  }
   function openNoteCrop(m) {
     if (!m || m.kind !== 'image') return;
     cropTargetIndex = s2.media.indexOf(m);
+    cropRatioPending = null;
     const start = (url) => {
       noteCropState = { scale: 1, tx: 0, ty: 0 };
       cropImgEl = $('#cropImg');
       cropImgEl.onload = () => {
-        const vp = cropVP.getBoundingClientRect();
-        const iw = cropImgEl.naturalWidth, ih = cropImgEl.naturalHeight;
-        cropBaseScale = Math.min(vp.width / iw, vp.height / ih) || 1;
-        cropImgEl.style.width = Math.round(iw * cropBaseScale) + 'px';
-        cropImgEl.style.height = Math.round(ih * cropBaseScale) + 'px';
-        applyCropTransform();
+        // 若有挂起的比例选择，先应用；否则默认「自由」= 图片原比例
+        if (cropRatioPending) {
+          applyRatioToVP(cropRatioPending);
+          cropRatio = cropRatioPending;
+          cropRatioPending = null;
+        } else {
+          setCropRatio('free');
+          return;
+        }
+        fitCropImage();
       };
       cropImgEl.src = url;
       $('#cropZoom').value = 1;
@@ -724,7 +787,14 @@
     if (!cropImgEl) return;
     cropImgEl.style.transform = `translate(${noteCropState.tx}px, ${noteCropState.ty}px) scale(${noteCropState.scale})`;
   }
-  function closeNoteCrop() { $('#cropModal').hidden = true; if (cropImgEl) cropImgEl.removeAttribute('src'); cropTargetIndex = -1; }
+  function closeNoteCrop() {
+    $('#cropModal').hidden = true;
+    if (cropImgEl) cropImgEl.removeAttribute('src');
+    if (cropVP) cropVP.style.aspectRatio = '';
+    cropTargetIndex = -1;
+    cropRatio = 'free';
+    if (cropRatiosEl) cropRatiosEl.querySelectorAll('.crop-ratio').forEach((b) => b.classList.toggle('is-active', b.dataset.ratio === 'free'));
+  }
   let noteCropDrag = false, cropLX = 0, cropLY = 0;
   cropVP.addEventListener('pointerdown', (e) => { noteCropDrag = true; cropLX = e.clientX; cropLY = e.clientY; try { cropVP.setPointerCapture(e.pointerId); } catch (x) {} });
   cropVP.addEventListener('pointermove', (e) => {
@@ -737,6 +807,14 @@
   $('#cropZoom').addEventListener('input', (e) => { noteCropState.scale = parseFloat(e.target.value) || 1; applyCropTransform(); });
   $('#cropCancel').addEventListener('click', closeNoteCrop);
   $('#cropReset').addEventListener('click', () => { noteCropState = { scale: 1, tx: 0, ty: 0 }; $('#cropZoom').value = 1; applyCropTransform(); });
+  // 比例按钮点击
+  if (cropRatiosEl) {
+    cropRatiosEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('.crop-ratio');
+      if (!btn) return;
+      setCropRatio(btn.dataset.ratio || 'free');
+    });
+  }
   $('#cropConfirm').addEventListener('click', () => {
     if (!cropImgEl || !cropImgEl.complete || !cropImgEl.naturalWidth) { toast('图片未就绪'); return; }
     const vp = cropVP.getBoundingClientRect();
@@ -768,10 +846,13 @@
 
   /* ============ T6 视频剪辑 ============ */
   let clipTargetIndex = -1;
+  // 画面裁切区域（归一化 0-1，相对源视频帧）；null = 不裁切
+  let clipFrameCrop = null;
   const clipVideo = $('#clipVideo');
   function openClip(m) {
     if (!m || m.kind !== 'video') return;
     clipTargetIndex = s2.media.indexOf(m);
+    clipFrameCrop = null; // 每次打开重置
     const start = (url) => {
       clipVideo.src = url; clipVideo.muted = false;
       clipVideo.onloadedmetadata = () => {
@@ -792,12 +873,116 @@
   }
   function updateClipInfo() {
     const { s, e } = clipBounds();
-    $('#clipInfo').textContent = `起 ${s.toFixed(1)}s · 止 ${e.toFixed(1)}s · 时长 ${(e - s).toFixed(1)}s`;
+    let info = `起 ${s.toFixed(1)}s · 止 ${e.toFixed(1)}s · 时长 ${(e - s).toFixed(1)}s`;
+    if (clipFrameCrop) info += ' · 已选区裁切';
+    $('#clipInfo').textContent = info;
   }
   $('#clipStart').addEventListener('input', updateClipInfo);
   $('#clipEnd').addEventListener('input', updateClipInfo);
-  $('#clipCancel').addEventListener('click', () => { $('#clipModal').hidden = true; clipVideo.removeAttribute('src'); clipTargetIndex = -1; });
-  $('#clipReset').addEventListener('click', () => { $('#clipStart').value = 0; $('#clipEnd').value = 1000; updateClipInfo(); });
+  $('#clipCancel').addEventListener('click', () => { $('#clipModal').hidden = true; clipVideo.removeAttribute('src'); clipTargetIndex = -1; clipFrameCrop = null; });
+  $('#clipReset').addEventListener('click', () => { $('#clipStart').value = 0; $('#clipEnd').value = 1000; clipFrameCrop = null; updateClipInfo(); });
+  // 打开画面裁切弹层（从 clipVideo 当前帧截一张画面作为底图）
+  $('#clipFrameCrop').addEventListener('click', () => {
+    if (!clipVideo.videoWidth) { toast('视频未就绪'); return; }
+    openFrameCropModal();
+  });
+  function openFrameCropModal() {
+    const cv = $('#fcCanvas');
+    const stage = $('#fcStage');
+    const vw = clipVideo.videoWidth, vh = clipVideo.videoHeight;
+    const sw = stage.clientWidth || 320;
+    const sh = Math.round(sw * vh / vw);
+    cv.width = sw; cv.height = sh;
+    const ctx = cv.getContext('2d');
+    try { ctx.drawImage(clipVideo, 0, 0, sw, sh); } catch (e) {}
+    // 默认框：居中 80% 大小
+    const box = $('#fcBox');
+    box.style.left = (sw * 0.1) + 'px';
+    box.style.top = (sh * 0.1) + 'px';
+    box.style.width = (sw * 0.8) + 'px';
+    box.style.height = (sh * 0.8) + 'px';
+    box.style.height = (sh * 0.8) + 'px';
+    $('#frameCropModal').dataset.sw = sw;
+    $('#frameCropModal').dataset.sh = sh;
+    $('#frameCropModal').dataset.vw = vw;
+    $('#frameCropModal').dataset.vh = vh;
+    $('#frameCropModal').hidden = false;
+    setupFrameCropDrag();
+  }
+  function setupFrameCropDrag() {
+    const box = $('#fcBox');
+    const stage = $('#fcStage');
+    let activeH = null, startBox = null, startPt = null;
+    function downH(h, e) {
+      activeH = h;
+      const r = box.getBoundingClientRect();
+      const sr = stage.getBoundingClientRect();
+      startBox = { x: r.left - sr.left, y: r.top - sr.top, w: r.width, h: r.height };
+      startPt = { x: e.clientX, y: e.clientY };
+      e.preventDefault();
+    }
+    box.querySelectorAll('.fc-handle').forEach((h) => {
+      h.onpointerdown = (e) => downH(h.dataset.h, e);
+    });
+    box.onpointerdown = (e) => {
+      if (e.target.classList.contains('fc-handle')) return;
+      activeH = 'move';
+      const r = box.getBoundingClientRect();
+      const sr = stage.getBoundingClientRect();
+      startBox = { x: r.left - sr.left, y: r.top - sr.top, w: r.width, h: r.height };
+      startPt = { x: e.clientX, y: e.clientY };
+      e.preventDefault();
+    };
+    function move(e) {
+      if (!activeH || !startBox) return;
+      const sr = stage.getBoundingClientRect();
+      const dx = e.clientX - startPt.x, dy = e.clientY - startPt.y;
+      let { x, y, w, h } = startBox;
+      const minW = 40, minH = 40;
+      if (activeH === 'move') { x += dx; y += dy; }
+      else if (activeH === 'nw') { x += dx; y += dy; w -= dx; h -= dy; if (w < minW) { x -= (minW - w); w = minW; } if (h < minH) { y -= (minH - h); h = minH; } }
+      else if (activeH === 'ne') { w += dx; y += dy; h -= dy; if (w < minW) w = minW; if (h < minH) { y -= (minH - h); h = minH; } }
+      else if (activeH === 'sw') { x += dx; w -= dx; h += dy; if (w < minW) { x -= (minW - w); w = minW; } if (h < minH) h = minH; }
+      else if (activeH === 'se') { w += dx; h += dy; if (w < minW) w = minW; if (h < minH) h = minH; }
+      // 限制在 stage 内
+      x = Math.max(0, Math.min(x, sr.width - minW));
+      y = Math.max(0, Math.min(y, sr.height - minH));
+      w = Math.min(w, sr.width - x);
+      h = Math.min(h, sr.height - y);
+      box.style.left = x + 'px';
+      box.style.top = y + 'px';
+      box.style.width = w + 'px';
+      box.style.height = h + 'px';
+    }
+    function up() { activeH = null; startBox = null; startPt = null; }
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', () => { up(); document.removeEventListener('pointermove', move); }, { once: true });
+  }
+  $('#frameCropCancel').addEventListener('click', () => { $('#frameCropModal').hidden = true; });
+  $('#frameCropReset').addEventListener('click', () => {
+    const stage = $('#fcStage');
+    const sw = stage.clientWidth;
+    const sh = parseInt($('#frameCropModal').dataset.sh, 10);
+    const box = $('#fcBox');
+    box.style.left = (sw * 0.1) + 'px';
+    box.style.top = (sh * 0.1) + 'px';
+    box.style.width = (sw * 0.8) + 'px';
+    box.style.height = (sh * 0.8) + 'px';
+  });
+  $('#frameCropConfirm').addEventListener('click', () => {
+    const stage = $('#fcStage');
+    const box = $('#fcBox');
+    const sr = stage.getBoundingClientRect();
+    const br = box.getBoundingClientRect();
+    const sx = (br.left - sr.left) / sr.width;
+    const sy = (br.top - sr.top) / sr.height;
+    const sw = br.width / sr.width;
+    const sh = br.height / sr.height;
+    clipFrameCrop = { sx, sy, sw, sh };
+    $('#frameCropModal').hidden = true;
+    updateClipInfo();
+    toast('已设置画面裁切');
+  });
   $('#clipConfirm').addEventListener('click', async () => {
     if (!clipVideo.videoWidth) { toast('视频未就绪'); return; }
     const { s, e } = clipBounds();
@@ -807,8 +992,18 @@
     sv.src = clipVideo.currentSrc || clipVideo.src;
     sv.muted = false; sv.playsInline = true; sv.crossOrigin = 'anonymous';
     await new Promise((res) => { sv.onloadeddata = res; sv.onerror = res; });
+    const vw = sv.videoWidth || 640, vh = sv.videoHeight || 480;
+    // 若设置画面裁切，画布尺寸按裁切区域；否则用原视频尺寸
+    let cw = vw, ch = vh, dx0 = 0, dy0 = 0, dw = vw, dh = vh;
+    if (clipFrameCrop) {
+      cw = Math.max(2, Math.round(vw * clipFrameCrop.sw));
+      ch = Math.max(2, Math.round(vh * clipFrameCrop.sh));
+      dx0 = Math.round(vw * clipFrameCrop.sx);
+      dy0 = Math.round(vh * clipFrameCrop.sy);
+      dw = cw; dh = ch;
+    }
     const canvas = document.createElement('canvas');
-    canvas.width = sv.videoWidth || 640; canvas.height = sv.videoHeight || 480;
+    canvas.width = cw; canvas.height = ch;
     const ctx = canvas.getContext('2d');
     const stream = canvas.captureStream(30);
     const mime = pickRecMime();
@@ -831,7 +1026,7 @@
     await new Promise((resolve) => {
       function tick() {
         if (sv.currentTime >= e || sv.ended) { try { sv.pause(); } catch (x) {} try { rec.stop(); } catch (x) {} resolve(); return; }
-        try { ctx.drawImage(sv, 0, 0, canvas.width, canvas.height); } catch (x) {}
+        try { ctx.drawImage(sv, dx0, dy0, dw, dh, 0, 0, cw, ch); } catch (x) {}
         requestAnimationFrame(tick);
       }
       requestAnimationFrame(tick);
@@ -861,9 +1056,24 @@
       SuiDB.storeMedia(blob).then((d) => { d.kind = 'image'; d._url = url; addComposeMedia(d); });
     });
   }
-  [capPhotoBack, capPhotoAlbum].forEach((inp) => {
-    if (inp) inp.addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; addPhotoFile(f); });
-  });
+  // 相册多选：capPhotoAlbum 允许一次选多张（最多 9 张）；拍照仍单张
+  if (capPhotoBack) {
+    capPhotoBack.addEventListener('change', (e) => {
+      const f = e.target.files && e.target.files[0]; e.target.value = '';
+      addPhotoFile(f);
+    });
+  }
+  if (capPhotoAlbum) {
+    capPhotoAlbum.addEventListener('change', (e) => {
+      const list = Array.from(e.target.files || []);
+      e.target.value = '';
+      if (!list.length) return;
+      const MAX = 9;
+      let picked = list.slice(0, MAX);
+      if (list.length > MAX) toast(`最多选 ${MAX} 张，已为你取前 ${MAX} 张`);
+      picked.forEach(addPhotoFile);
+    });
+  }
 
   // 拍摄 / 上传来源选择弹层
   // 注意：拍照/相册类选项改为 <label for=...> 原生触发 <input type=file>，
@@ -927,8 +1137,23 @@
   }
   function applyRecOrient() {
     if (!recPreview) return;
-    if (recOrient === 'landscape') { recPreview.classList.add('land'); if (recOrientBtn) recOrientBtn.textContent = '▭ 横屏'; }
-    else { recPreview.classList.remove('land'); if (recOrientBtn) recOrientBtn.textContent = '▯ 竖屏'; }
+    const isLand = recOrient === 'landscape';
+    recPreview.classList.toggle('land', isLand);
+    if (recOrientBtn) recOrientBtn.textContent = isLand ? '▭ 横屏' : '▯ 竖屏';
+    // 关键：旋转整个录制 sheet（CSS rotate 90°），让取景框真正变成横屏
+    document.body.classList.toggle('rec-land', isLand);
+    // 已有流则重启以应用新的视频尺寸约束
+    if (recStream && recPreview.srcObject === recStream) {
+      try { recPreview.srcObject = null; } catch (e) {}
+      recStream.getTracks().forEach((t) => { try { t.stop(); } catch (e) {} });
+      recStream = null;
+      navigator.mediaDevices.getUserMedia(recVideoConstraints()).then((s) => {
+        recStream = s;
+        resetPreviewForLive();
+        recPreview.srcObject = s;
+        try { recPreview.play(); } catch (e) {}
+      }).catch(() => {});
+    }
   }
   const REC_MAX = 60;
   const REC_MIN_MS = 700; // 低于此时长的点击视为误触，不生成空视频
@@ -966,6 +1191,9 @@
     setRecUI('idle');
     applyRecOrient();
     recTimerEl.textContent = '0:00 / ' + REC_MAX_LABEL;
+    // 顶部提示：本条手记是否已有视频
+    const hint = $('#recHint');
+    if (hint) hint.hidden = !noteHasVideo();
   }
   function closeRec() {
     recModal.hidden = true;
