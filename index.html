@@ -298,7 +298,10 @@
             <div class="rec-sheet">
               <div class="rec-head">
                 <span class="rec-title">拍摄视频 · 最长 60 秒</span>
-                <button class="rec-close" id="recClose" aria-label="关闭">✕</button>
+                <div class="rec-head-right">
+                  <button class="rec-orient" id="recOrient" type="button" aria-label="切换横竖屏">▯ 竖屏</button>
+                  <button class="rec-close" id="recClose" aria-label="关闭">✕</button>
+                </div>
               </div>
               <div class="rec-stage">
                 <video class="rec-preview" id="recPreview" autoplay muted playsinline></video>
@@ -310,6 +313,44 @@
                 <button class="rec-btn rec-stop" id="recStop" hidden>■ 停止拍摄</button>
                 <button class="rec-btn rec-retake" id="recRetake" hidden>重拍</button>
                 <button class="rec-btn rec-use" id="recUse" hidden>使用</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 放大查看弹层 -->
+          <div class="lb-mask" id="lightbox" hidden>
+            <button class="lb-close" id="lbClose" aria-label="关闭">✕</button>
+            <div class="lb-stage" id="lbStage"></div>
+          </div>
+
+          <!-- 照片裁剪弹层 -->
+          <div class="modal-mask" id="cropModal" hidden>
+            <div class="modal-sheet">
+              <div class="modal-head"><span>裁剪照片</span><button class="modal-x" id="cropCancel" aria-label="取消">✕</button></div>
+              <div class="crop-viewport" id="cropViewport"><img id="cropImg" alt=""></div>
+              <div class="crop-tools">
+                <input type="range" id="cropZoom" min="1" max="3" step="0.01" value="1" class="crop-range">
+                <div class="modal-actions">
+                  <button class="btn-ghost" id="cropReset">重置</button>
+                  <button class="btn-primary" id="cropConfirm">确认裁剪</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 视频剪辑弹层 -->
+          <div class="modal-mask" id="clipModal" hidden>
+            <div class="modal-sheet">
+              <div class="modal-head"><span>剪辑视频</span><button class="modal-x" id="clipCancel" aria-label="取消">✕</button></div>
+              <video id="clipVideo" class="clip-video" controls playsinline preload="metadata"></video>
+              <div class="clip-trims">
+                <input type="range" id="clipStart" min="0" max="1000" value="0" class="clip-range">
+                <input type="range" id="clipEnd" min="0" max="1000" value="1000" class="clip-range">
+              </div>
+              <div class="clip-info" id="clipInfo">起 0.0s · 止 0.0s</div>
+              <div class="modal-actions">
+                <button class="btn-ghost" id="clipReset">重置</button>
+                <button class="btn-primary" id="clipConfirm">确认剪辑</button>
               </div>
             </div>
           </div>
