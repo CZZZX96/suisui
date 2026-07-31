@@ -123,12 +123,12 @@
   function mediaBlock(m) {
     if (m.svg) return `<div class="doodle-canvas"><svg viewBox="0 0 280 90" preserveAspectRatio="xMidYMid meet">${m.svg}</svg></div>`;
     if (m.src) {
-      if (m.kind === 'image') return `<div class="card-photo" style="background-image:url('${esc(m.src)}')"></div>`;
+      if (m.kind === 'image') return `<img class="card-photo-img" src="${esc(m.src)}" alt="" loading="lazy">`;
       if (m.kind === 'video') return `<div class="video-thumb" style="background-image:url('${esc(m.src)}')">${videoPlay}<span class="video-dur">${esc(m.dur || '')}</span></div>`;
       if (m.kind === 'drawing') return `<img class="doodle-img" src="${esc(m.src)}" alt="涂鸦"/>`;
     }
     if (m.mediaId) {
-      if (m.kind === 'image') return `<div class="card-photo" data-media-kind="image" data-media-id="${esc(m.mediaId)}"></div>`;
+      if (m.kind === 'image') return `<img class="card-photo-img" data-media-kind="image" data-media-id="${esc(m.mediaId)}" alt="" loading="lazy">`;
       if (m.kind === 'video') return `<div class="card-video-wrap"><video class="card-video" controls playsinline data-media-kind="video" data-media-id="${esc(m.mediaId)}"></video>${m.dur ? `<span class="video-dur-pill">${esc(m.dur)}</span>` : ''}</div>`;
       if (m.kind === 'drawing') return `<img class="doodle-img" data-media-kind="drawing" data-media-id="${esc(m.mediaId)}" alt="涂鸦"/>`;
     }
@@ -642,25 +642,215 @@
   function s2Preview(m) { return m._url || m.src || ''; }
   function renderTray() {
     s2.tray.innerHTML = s2.media
-      .map(
-        (m, i) => `<div class="tray-item" data-i="${i}">
-          ${m.kind === 'video' ? `<video src="${esc(s2Preview(m))}" controls playsinline></video>` : `<img src="${esc(s2Preview(m))}" alt="">`}
-          <button class="tray-x" data-rm="${i}" aria-label="移除">×</button>
-        </div>`
-      )
+      .map((m, i) => `<div class="tray-item" data-i="${i}">
+          ${m.kind === 'video' ? `<video src="${esc(s2Preview(m))}" playsinline preload="metadata"></video>` : `<img src="${esc(s2Preview(m))}" alt="">`}
+          <div class="tray-tools">
+            ${m.kind === 'image' ? `<button class="tray-act tray-crop" data-crop="${i}" aria-label="裁剪">裁剪</button>` : ''}
+            ${m.kind === 'video' ? `<button class="tray-act tray-clip" data-clip="${i}" aria-label="剪辑">剪辑</button>` : ''}
+            <button class="tray-x" data-rm="${i}" aria-label="移除">×</button>
+          </div>
+        </div>`)
       .join('');
   }
   s2.tray.addEventListener('click', (e) => {
-    const x = e.target.closest('[data-rm]');
-    if (!x) return;
-    const i = +x.dataset.rm;
-    const m = s2.media[i];
-    if (m && m.mediaId) SuiDB.deleteMedia(m.mediaId);
-    s2.media.splice(i, 1);
-    renderTray();
+    const rm = e.target.closest('[data-rm]');
+    if (rm) {
+      const i = +rm.dataset.rm;
+      const m = s2.media[i];
+      if (m && m.mediaId) SuiDB.deleteMedia(m.mediaId);
+      s2.media.splice(i, 1);
+      renderTray();
+      return;
+    }
+    const view = e.target.closest('[data-view]');
+    if (view) { openLightbox(s2.media[+view.dataset.view]); return; }
+    const crop = e.target.closest('[data-crop]');
+    if (crop) { openNoteCrop(s2.media[+crop.dataset.crop]); return; }
+    const clip = e.target.closest('[data-clip]');
+    if (clip) { openClip(s2.media[+clip.dataset.clip]); return; }
+    const item = e.target.closest('.tray-item');
+    if (item) openLightbox(s2.media[+item.dataset.i]);
   });
 
   function addComposeMedia(desc) { s2.media.push(desc); renderTray(); }
+
+  /* ============ T4 放大查看（lightbox） ============ */
+  function openLightbox(m) {
+    if (!m) return;
+    const stage = $('#lbStage');
+    stage.innerHTML = '';
+    const kind = m.kind || 'image';
+    const show = (u) => {
+      if (kind === 'video') {
+        const v = document.createElement('video'); v.src = u; v.controls = true; v.playsInline = true; stage.appendChild(v);
+      } else {
+        const img = document.createElement('img'); img.src = u; stage.appendChild(img);
+      }
+    };
+    const url = s2Preview(m);
+    if (url) show(url);
+    else if (m.mediaId) SuiDB.mediaURL(m.mediaId).then((u) => { if (u) show(u); });
+    $('#lightbox').hidden = false;
+  }
+  $('#lbClose').addEventListener('click', () => { $('#lightbox').hidden = true; $('#lbStage').innerHTML = ''; });
+  $('#lightbox').addEventListener('click', (e) => { if (e.target.id === 'lightbox') { $('#lightbox').hidden = true; $('#lbStage').innerHTML = ''; } });
+
+  /* ============ T5 照片裁剪（手记内） ============ */
+  let noteCropState = { scale: 1, tx: 0, ty: 0 }, cropBaseScale = 1, cropImgEl = null, cropTargetIndex = -1;
+  const cropVP = $('#cropViewport');
+  function openNoteCrop(m) {
+    if (!m || m.kind !== 'image') return;
+    cropTargetIndex = s2.media.indexOf(m);
+    const start = (url) => {
+      noteCropState = { scale: 1, tx: 0, ty: 0 };
+      cropImgEl = $('#cropImg');
+      cropImgEl.onload = () => {
+        const vp = cropVP.getBoundingClientRect();
+        const iw = cropImgEl.naturalWidth, ih = cropImgEl.naturalHeight;
+        cropBaseScale = Math.min(vp.width / iw, vp.height / ih) || 1;
+        cropImgEl.style.width = Math.round(iw * cropBaseScale) + 'px';
+        cropImgEl.style.height = Math.round(ih * cropBaseScale) + 'px';
+        applyCropTransform();
+      };
+      cropImgEl.src = url;
+      $('#cropZoom').value = 1;
+      $('#cropModal').hidden = false;
+    };
+    const url = s2Preview(m);
+    if (url) start(url);
+    else if (m.mediaId) SuiDB.mediaURL(m.mediaId).then((u) => { if (u) start(u); });
+  }
+  function applyCropTransform() {
+    if (!cropImgEl) return;
+    cropImgEl.style.transform = `translate(${noteCropState.tx}px, ${noteCropState.ty}px) scale(${noteCropState.scale})`;
+  }
+  function closeNoteCrop() { $('#cropModal').hidden = true; if (cropImgEl) cropImgEl.removeAttribute('src'); cropTargetIndex = -1; }
+  let noteCropDrag = false, cropLX = 0, cropLY = 0;
+  cropVP.addEventListener('pointerdown', (e) => { noteCropDrag = true; cropLX = e.clientX; cropLY = e.clientY; try { cropVP.setPointerCapture(e.pointerId); } catch (x) {} });
+  cropVP.addEventListener('pointermove', (e) => {
+    if (!noteCropDrag) return;
+    noteCropState.tx += e.clientX - cropLX; noteCropState.ty += e.clientY - cropLY;
+    cropLX = e.clientX; cropLY = e.clientY; applyCropTransform();
+  });
+  cropVP.addEventListener('pointerup', () => { noteCropDrag = false; });
+  cropVP.addEventListener('pointercancel', () => { noteCropDrag = false; });
+  $('#cropZoom').addEventListener('input', (e) => { noteCropState.scale = parseFloat(e.target.value) || 1; applyCropTransform(); });
+  $('#cropCancel').addEventListener('click', closeNoteCrop);
+  $('#cropReset').addEventListener('click', () => { noteCropState = { scale: 1, tx: 0, ty: 0 }; $('#cropZoom').value = 1; applyCropTransform(); });
+  $('#cropConfirm').addEventListener('click', () => {
+    if (!cropImgEl || !cropImgEl.complete || !cropImgEl.naturalWidth) { toast('图片未就绪'); return; }
+    const vp = cropVP.getBoundingClientRect();
+    const iw = cropImgEl.naturalWidth, ih = cropImgEl.naturalHeight;
+    const dispW = iw * cropBaseScale * noteCropState.scale, dispH = ih * cropBaseScale * noteCropState.scale;
+    const imgLeft = (vp.width - dispW) / 2 + noteCropState.tx, imgTop = (vp.height - dispH) / 2 + noteCropState.ty;
+    const k = cropBaseScale * noteCropState.scale;
+    const sx0 = (0 - imgLeft) / k, sy0 = (0 - imgTop) / k;
+    const sx1 = (vp.width - imgLeft) / k, sy1 = (vp.height - imgTop) / k;
+    const cw = Math.max(1, Math.round(sx1 - sx0)), ch = Math.max(1, Math.round(sy1 - sy0));
+    const canvas = document.createElement('canvas'); canvas.width = cw; canvas.height = ch;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(cropImgEl, sx0, sy0, cw, ch, 0, 0, cw, ch);
+    canvas.toBlob((blob) => {
+      if (!blob) { toast('裁剪失败'); return; }
+      const url = URL.createObjectURL(blob);
+      SuiDB.storeMedia(blob).then((d) => {
+        d.kind = 'image'; d._url = url;
+        if (cropTargetIndex >= 0 && cropTargetIndex < s2.media.length) {
+          const old = s2.media[cropTargetIndex];
+          if (old && old.mediaId) SuiDB.deleteMedia(old.mediaId);
+          s2.media[cropTargetIndex] = d; renderTray();
+        }
+        closeNoteCrop(); toast('已裁剪');
+      });
+    }, 'image/jpeg', 0.9);
+  });
+  /* CLIP_NEXT */
+
+  /* ============ T6 视频剪辑 ============ */
+  let clipTargetIndex = -1;
+  const clipVideo = $('#clipVideo');
+  function openClip(m) {
+    if (!m || m.kind !== 'video') return;
+    clipTargetIndex = s2.media.indexOf(m);
+    const start = (url) => {
+      clipVideo.src = url; clipVideo.muted = false;
+      clipVideo.onloadedmetadata = () => {
+        $('#clipStart').value = 0; $('#clipEnd').value = 1000;
+        updateClipInfo();
+        $('#clipModal').hidden = false;
+      };
+    };
+    const url = s2Preview(m);
+    if (url) start(url);
+    else if (m.mediaId) SuiDB.mediaURL(m.mediaId).then((u) => { if (u) start(u); });
+  }
+  function clipBounds() {
+    const d = clipVideo.duration || 0;
+    const s = (+$('#clipStart').value) / 1000 * d;
+    const e = (+$('#clipEnd').value) / 1000 * d;
+    return { d, s: Math.min(s, e), e: Math.max(s, e) };
+  }
+  function updateClipInfo() {
+    const { s, e } = clipBounds();
+    $('#clipInfo').textContent = `起 ${s.toFixed(1)}s · 止 ${e.toFixed(1)}s · 时长 ${(e - s).toFixed(1)}s`;
+  }
+  $('#clipStart').addEventListener('input', updateClipInfo);
+  $('#clipEnd').addEventListener('input', updateClipInfo);
+  $('#clipCancel').addEventListener('click', () => { $('#clipModal').hidden = true; clipVideo.removeAttribute('src'); clipTargetIndex = -1; });
+  $('#clipReset').addEventListener('click', () => { $('#clipStart').value = 0; $('#clipEnd').value = 1000; updateClipInfo(); });
+  $('#clipConfirm').addEventListener('click', async () => {
+    if (!clipVideo.videoWidth) { toast('视频未就绪'); return; }
+    const { s, e } = clipBounds();
+    if (e - s < 0.3) { toast('片段太短'); return; }
+    toast('正在剪辑视频…');
+    const sv = document.createElement('video');
+    sv.src = clipVideo.currentSrc || clipVideo.src;
+    sv.muted = false; sv.playsInline = true; sv.crossOrigin = 'anonymous';
+    await new Promise((res) => { sv.onloadeddata = res; sv.onerror = res; });
+    const canvas = document.createElement('canvas');
+    canvas.width = sv.videoWidth || 640; canvas.height = sv.videoHeight || 480;
+    const ctx = canvas.getContext('2d');
+    const stream = canvas.captureStream(30);
+    const mime = pickRecMime();
+    let rec;
+    try { rec = new MediaRecorder(stream, { mimeType: mime }); } catch (err) { rec = new MediaRecorder(stream); }
+    const chunks = [];
+    rec.ondataavailable = (ev) => { if (ev.data && ev.data.size) chunks.push(ev.data); };
+    const done = new Promise((res) => { rec.onstop = res; });
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const ac = new AC();
+      const srcNode = ac.createMediaElementSource(sv);
+      const dest = ac.createMediaStreamDestination();
+      srcNode.connect(dest);
+      const at = dest.stream.getAudioTracks()[0];
+      if (at) stream.addTrack(at);
+    } catch (err) { /* 无音频则静音合成 */ }
+    rec.start();
+    try { sv.currentTime = s; await sv.play(); } catch (err) {}
+    await new Promise((resolve) => {
+      function tick() {
+        if (sv.currentTime >= e || sv.ended) { try { sv.pause(); } catch (x) {} try { rec.stop(); } catch (x) {} resolve(); return; }
+        try { ctx.drawImage(sv, 0, 0, canvas.width, canvas.height); } catch (x) {}
+        requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    });
+    await done;
+    const blob = new Blob(chunks, { type: mime });
+    if (!blob || !blob.size) { toast('剪辑失败，请重试'); $('#clipModal').hidden = true; return; }
+    const url = URL.createObjectURL(blob);
+    SuiDB.storeMedia(blob).then((d) => {
+      d.kind = 'video'; d._url = url; d.dur = fmtSec(e - s);
+      if (clipTargetIndex >= 0 && clipTargetIndex < s2.media.length) {
+        const old = s2.media[clipTargetIndex];
+        if (old && old.mediaId) SuiDB.deleteMedia(old.mediaId);
+        s2.media[clipTargetIndex] = d; renderTray();
+      }
+      $('#clipModal').hidden = true; clipVideo.removeAttribute('src'); clipTargetIndex = -1;
+      toast('已剪辑');
+    });
+  });
 
   // 图片：拍照（系统相机内可切换前后置）或相册选择（压缩后存 IndexedDB）
   const capPhotoBack = $('#capPhotoBack'), capPhotoAlbum = $('#capPhotoAlbum');
@@ -720,7 +910,26 @@
   const recStopBtn = $('#recStop');
   const recAlbum = $('#recAlbum'), recClose = $('#recClose');
   let recFacing = 'environment';
+  let recOrient = 'portrait';
+  const recOrientBtn = $('#recOrient');
   let recStream = null, mediaRec = null, recChunks = [], recTimerInt = null, recStartTs = 0, recBlob = null, recUrl = null, recDur = 0;
+  // 横屏/竖屏：取流约束按方向设比例；预览容器也按方向切换比例，均不裁切
+  function recVideoConstraints() {
+    const portrait = recOrient !== 'landscape';
+    return {
+      video: {
+        facingMode: recFacing,
+        width: portrait ? { ideal: 720 } : { ideal: 1280 },
+        height: portrait ? { ideal: 1280 } : { ideal: 720 }
+      },
+      audio: { echoCancellation: true, noiseSuppression: true }
+    };
+  }
+  function applyRecOrient() {
+    if (!recPreview) return;
+    if (recOrient === 'landscape') { recPreview.classList.add('land'); if (recOrientBtn) recOrientBtn.textContent = '▭ 横屏'; }
+    else { recPreview.classList.remove('land'); if (recOrientBtn) recOrientBtn.textContent = '▯ 竖屏'; }
+  }
   const REC_MAX = 60;
   const REC_MIN_MS = 700; // 低于此时长的点击视为误触，不生成空视频
 
@@ -755,6 +964,7 @@
     recModal.hidden = false;
     resetPreviewForLive();
     setRecUI('idle');
+    applyRecOrient();
     recTimerEl.textContent = '0:00 / ' + REC_MAX_LABEL;
   }
   function closeRec() {
@@ -828,10 +1038,7 @@
   if (recShoot) recShoot.addEventListener('click', async () => {
     recShoot.disabled = true;
     try {
-      recStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: recFacing },
-        audio: { echoCancellation: true, noiseSuppression: true }
-      });
+      recStream = await navigator.mediaDevices.getUserMedia(recVideoConstraints());
     } catch (err) {
       recShoot.disabled = false;
       toast('无法访问相机，已为你打开相册选择'); openRecAlbum(); return;
@@ -888,6 +1095,10 @@
   });
   if (recAlbum) recAlbum.addEventListener('click', openRecAlbum);
   if (recClose) recClose.addEventListener('click', closeRec);
+  if (recOrientBtn) recOrientBtn.addEventListener('click', () => {
+    recOrient = recOrient === 'portrait' ? 'landscape' : 'portrait';
+    applyRecOrient();
+  });
   const capVideoAlbum = $('#capVideoAlbum');
   if (capVideoAlbum) capVideoAlbum.addEventListener('change', (e) => {
     const f = e.target.files && e.target.files[0]; e.target.value = '';
@@ -1963,14 +2174,13 @@
     const bodyLines = wrapLines(probe, bodyText, innerW);
     const lineH = 26;
     const bodyTop = 56;
-    // 媒体区：单图 maxH 320；多图 maxH 180 每张
+    // 媒体区：单图过大限制高度；多图统一全宽、按原比例完整显示（竖屏/横屏视觉一致全宽）
     const medGap = 10;
-    const medMaxSingleH = 560, medMaxMultiH = 240;
+    const medMaxSingleH = 560;
     const medItems = validImgs.map((img) => {
-      const maxH = validImgs.length === 1 ? medMaxSingleH : medMaxMultiH;
       const iw = (img.naturalWidth || img.width) || 1, ih = (img.naturalHeight || img.height) || 1;
       let w = innerW, h = Math.round(innerW * ih / iw);
-      if (h > maxH) { h = maxH; w = Math.round(maxH * iw / ih); }
+      if (validImgs.length === 1 && h > medMaxSingleH) { h = medMaxSingleH; w = Math.round(medMaxSingleH * iw / ih); }
       return { img, w, h, x: pad, y: 0 }; // 左缘与正文对齐：边缘到边框距离同正文
     });
     let medY = bodyTop + (bodyLines.length ? bodyLines.length * lineH : 0) + (bodyLines.length ? 22 : 0);
@@ -2033,12 +2243,11 @@
     const lineH = 26;
     const bodyTop = 56;
     const medGap = 10;
-    const medMaxSingleH = 560, medMaxMultiH = 240;
+    const medMaxSingleH = 560;
     const medItems = validImgs.map((img) => {
-      const maxH = validImgs.length === 1 ? medMaxSingleH : medMaxMultiH;
       const iw = (img.naturalWidth || img.width) || 1, ih = (img.naturalHeight || img.height) || 1;
       let w = innerW, h = Math.round(innerW * ih / iw);
-      if (h > maxH) { h = maxH; w = Math.round(maxH * iw / ih); }
+      if (validImgs.length === 1 && h > medMaxSingleH) { h = medMaxSingleH; w = Math.round(medMaxSingleH * iw / ih); }
       return { img, w, h, x: pad, y: 0 };
     });
     let medY = bodyTop + (bodyLines.length ? bodyLines.length * lineH : 0) + (bodyLines.length ? 22 : 0);
