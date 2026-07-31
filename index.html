@@ -279,7 +279,7 @@
           </div>
 
           <input type="file" id="capPhotoBack" accept="image/*" capture="environment" class="sui-file-off" />
-          <input type="file" id="capPhotoAlbum" accept="image/*" class="sui-file-off" />
+          <input type="file" id="capPhotoAlbum" accept="image/*" multiple class="sui-file-off" />
           <input type="file" id="capVideoBack" accept="video/*" capture="environment" class="sui-file-off" />
           <input type="file" id="capVideoFront" accept="video/*" capture="user" class="sui-file-off" />
           <input type="file" id="capVideoAlbum" accept="video/*" class="sui-file-off" />
@@ -307,6 +307,7 @@
                 <video class="rec-preview" id="recPreview" autoplay muted playsinline></video>
                 <div class="rec-timer" id="recTimer">0:00 / 1:00</div>
               </div>
+              <div class="rec-hint" id="recHint" hidden>本条手记已有一条视频，再次拍摄将替换原视频。</div>
               <div class="rec-actions">
                 <button class="rec-btn rec-album" id="recAlbum">相册</button>
                 <button class="rec-btn rec-shoot" id="recShoot">● 拍摄</button>
@@ -327,6 +328,13 @@
           <div class="modal-mask" id="cropModal" hidden>
             <div class="modal-sheet">
               <div class="modal-head"><span>裁剪照片</span><button class="modal-x" id="cropCancel" aria-label="取消">✕</button></div>
+              <div class="crop-ratios" id="cropRatios">
+                <button type="button" class="crop-ratio is-active" data-ratio="free">自由</button>
+                <button type="button" class="crop-ratio" data-ratio="1:1">1:1</button>
+                <button type="button" class="crop-ratio" data-ratio="4:3">4:3</button>
+                <button type="button" class="crop-ratio" data-ratio="3:4">3:4</button>
+                <button type="button" class="crop-ratio" data-ratio="16:9">16:9</button>
+              </div>
               <div class="crop-viewport" id="cropViewport"><img id="cropImg" alt=""></div>
               <div class="crop-tools">
                 <input type="range" id="cropZoom" min="1" max="3" step="0.01" value="1" class="crop-range">
@@ -349,8 +357,30 @@
               </div>
               <div class="clip-info" id="clipInfo">起 0.0s · 止 0.0s</div>
               <div class="modal-actions">
+                <button class="btn-ghost" id="clipFrameCrop">画面裁切</button>
                 <button class="btn-ghost" id="clipReset">重置</button>
                 <button class="btn-primary" id="clipConfirm">确认剪辑</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 视频画面裁切弹层（从剪辑弹层进入） -->
+          <div class="modal-mask" id="frameCropModal" hidden>
+            <div class="modal-sheet">
+              <div class="modal-head"><span>画面裁切</span><button class="modal-x" id="frameCropCancel" aria-label="取消">✕</button></div>
+              <div class="fc-stage" id="fcStage">
+                <canvas id="fcCanvas"></canvas>
+                <div class="fc-box" id="fcBox">
+                  <div class="fc-handle" data-h="nw"></div>
+                  <div class="fc-handle" data-h="ne"></div>
+                  <div class="fc-handle" data-h="sw"></div>
+                  <div class="fc-handle" data-h="se"></div>
+                </div>
+              </div>
+              <div class="fc-aspect-info" id="fcInfo">拖动四角调整裁切范围 · 用于剔除广告牌等多余内容</div>
+              <div class="modal-actions">
+                <button class="btn-ghost" id="frameCropReset">重置</button>
+                <button class="btn-primary" id="frameCropConfirm">确认裁切</button>
               </div>
             </div>
           </div>
