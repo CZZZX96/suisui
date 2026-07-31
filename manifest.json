@@ -1,0 +1,34 @@
+{
+  "name": "随遂 · 随手记 & 记账",
+  "short_name": "随遂",
+  "description": "随手记、周整理报告、记账记账与月度收支汇总。一个安静地陪你记录生活的 App。",
+  "lang": "zh-CN",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#F5F4F1",
+  "theme_color": "#D08068",
+  "categories": ["productivity", "lifestyle", "finance"],
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
