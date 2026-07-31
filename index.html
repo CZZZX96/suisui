@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>随遂 · 随手记 & 记账</title>
+  <meta name="theme-color" content="#D08068" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="随遂" />
+  <link rel="manifest" href="manifest.json" />
+  <style id="critical-app">
+    /* 关键兜底样式：一旦 JS 给 <html> 加上 app-standalone / app-narrow 类，
+       立即切到全屏 App 样式，不依赖外部 CSS 文件（避免被旧 SW 缓存困住）。 */
+    html.app-standalone body, html.app-narrow body { background: #F6F2EC; }
+    html.app-standalone .page-header, html.app-narrow .page-header { display: none !important; }
+    html.app-standalone .stage, html.app-narrow .stage { display: block !important; padding: 0 !important; }
+    html.app-standalone .phone, html.app-narrow .phone {
+      width: 100% !important;
+      height: 100dvh !important;
+      min-height: 100dvh !important;
+      max-width: none !important;
+      border-radius: 0 !important;
+      box-shadow: none !important;
+      border: 0 !important;
+    }
+    html.app-standalone .phone-notch, html.app-narrow .phone-notch { display: none !important; }
+    html.app-standalone .status-bar, html.app-narrow .status-bar { display: none !important; }
+    html.app-standalone .screen, html.app-narrow .screen { padding-top: env(safe-area-inset-top, 0px) !important; }
+    html.app-standalone .tab-bar, html.app-narrow .tab-bar {
+      height: calc(83px + env(safe-area-inset-bottom, 0px)) !important;
+      padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+    }
+    html.app-standalone .screen .scroll-area, html.app-narrow .screen .scroll-area {
+      padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)) !important;
+    }
+    /* 屏5 记账录入：底部数字键盘约 250px 高，避免备注栏被遮挡 */
+    html.app-standalone #screen-5 .scroll-area, html.app-narrow #screen-5 .scroll-area {
+      padding-bottom: calc(258px + env(safe-area-inset-bottom, 0px)) !important;
+    }
+    html.app-standalone .fab, html.app-narrow .fab {
+      bottom: calc(99px + env(safe-area-inset-bottom, 0px)) !important;
+    }
+  </style>
+  <script>
+    // 极早检测 PWA / TWA 启动模式，给 <html> 加 class，
+    // 让 CSS 能立即切到「全屏 App 样式」（隐藏桌面预览外壳、铺满视口），
+    // 而不依赖某些 WebView 不可靠的 (display-mode: standalone) 媒体查询。
+    (function () {
+      try {
+        var isStandalone =
+          window.matchMedia && window.matchMedia('(display-mode: standalone)').matches ||
+          window.matchMedia && window.matchMedia('(display-mode: minimal-ui)').matches ||
+          // iOS Safari「添加到主屏幕」后
+          window.navigator.standalone === true ||
+          // TWA / 小米 WebView 等
+          (typeof document !== 'undefined' && document.referrer || '').indexOf('android-app://') === 0;
+        if (isStandalone) {
+          document.documentElement.classList.add('app-standalone');
+        }
+        // 同时也按 UA + 窄屏兜底（防止 PWA 检测漏判）
+        var narrow = window.innerWidth <= 640;
+        if (narrow) document.documentElement.classList.add('app-narrow');
+      } catch (e) { /* 忽略检测错误，CSS 媒体查询兜底 */ }
+    })();
+  </script>
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;500;600;700&family=Ma+Shan+Zheng&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="page-header">
+      <div class="title-wrap">
+        <span class="logo">✦</span>
+        <h1>随遂</h1>
+        <span class="tag">设计稿交互还原 · 7 屏</span>
+      </div>
+      <nav class="screen-nav" id="screenNav">
+        <button class="nav-btn active" data-target="screen-1">01 随记主页</button>
+        <button class="nav-btn" data-target="screen-2">02 记录编辑</button>
+        <button class="nav-btn" data-target="screen-3">03 周整理报告</button>
+        <button class="nav-btn" data-target="screen-4">04 记账主页</button>
+        <button class="nav-btn" data-target="screen-5">05 记账录入</button>
+        <button class="nav-btn" data-target="screen-6">06 周账单</button>
+        <button class="nav-btn" data-target="screen-7">07 月度收支</button>
+      </nav>
+    </header>
+
+    <div class="stage">
+      <div class="phone" id="phone">
+        <div class="phone-notch"></div>
+
+        <!-- ============== Screen 1: 随记主页 ============== -->
+        <section class="screen active" id="screen-1" data-name="01 随记 · 本周手记">
+          <div class="status-bar">
+            <span class="time">9:41</span>
+            <div class="status-icons">
+              <svg width="18" height="12" viewBox="0 0 18 12"><path d="M1 9h2v3H1zM5 7h2v5H5zM9 4h2v8H9zM13 1h2v11h-2z" fill="#1A1918"/></svg>
+              <svg width="16" height="12" viewBox="0 0 16 12"><path d="M8 2.4c2.1 0 4 .8 5.5 2.1l1.1-1.1A8.9 8.9 0 0 0 8 .5 8.9 8.9 0 0 0 1.4 3.4l1.1 1.1A7.7 7.7 0 0 1 8 2.4zm0 3.2c1.2 0 2.3.4 3.1 1.1l1.1-1.1A6 6 0 0 0 8 3.7a6 6 0 0 0-4.2 1.9l1.1 1.1A4.4 4.4 0 0 1 8 5.6zm0 3.2c.4 0 .8.1 1.1.4l1.1-1.1A3.6 3.6 0 0 0 8 6.9a3.6 3.6 0 0 0-2.2 1.2l1.1 1.1c.3-.3.7-.4 1.1-.4z" fill="#1A1918"/></svg>
+              <svg width="26" height="12" viewBox="0 0 26 12"><rect x="0.5" y="1.5" width="22" height="9" rx="2" stroke="#1A1918" fill="none"/><rect x="2" y="3" width="18" height="6" rx="1" fill="#1A1918"/><rect x="23.5" y="4.5" width="1.5" height="3" rx="0.5" fill="#1A1918"/></svg>
+            </div>
+          </div>
+
+          <div class="scroll-area">
+            <header class="s1-header">
+              <div class="pill-wrap s1-month-btn-wrap">
+                <button type="button" class="month-pill" id="s1-month-btn" data-drop-btn aria-label="选择月份">
+                  <span id="s1-month-label">2026 年 7 月</span>
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="m3 5 4 4 4-4" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <div class="inline-drop" id="s1-month-drop" hidden></div>
+              </div>
+              <button class="s1-search" id="s1-search-btn" aria-label="搜索">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="6" stroke="#1A1918" stroke-width="1.6"/><path d="m13.5 13.5 3.5 3.5" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round"/></svg>
+              </button>
+            </header>
+            <div class="s1-searchbar" id="s1-searchbar" hidden>
+              <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="6" stroke="#6D6C6A" stroke-width="1.6"/><path d="m13.5 13.5 3.5 3.5" stroke="#6D6C6A" stroke-width="1.6" stroke-linecap="round"/></svg>
+              <input id="s1-search-input" class="s1-search-input" placeholder="搜索手记内容、地点…" />
+              <button id="s1-search-clear" class="s1-search-clear" aria-label="清除">✕</button>
+            </div>
+
+            <div class="s1-persist">
+              <span class="s1-persist-icon">
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M9 2.5l5 2v4c0 3-2.2 5.8-5 7-2.8-1.2-5-4-5-7v-4z" stroke="#B08968" stroke-width="1.5" stroke-linejoin="round"/><path d="m6.5 9 1.8 1.8L12 7" stroke="#B08968" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="s1-persist-text">随手记录（文字 / 图片 / 视频 / 绘图）与每周整理报告都会<strong>永久留存</strong>在「随记」，不会随周清除。</span>
+            </div>
+
+            <button class="s1-remind" data-nav="screen-3">
+              <span class="s1-remind-icon">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 1.5 12 6l4.7.7-3.4 3.3.8 4.7L10 12.5 5.9 14.7l.8-4.7L3.3 6.7 8 6z" fill="#3D8A5A"/><path d="M10 1.5 12 6l4.7.7-3.4 3.3.8 4.7L10 12.5 5.9 14.7l.8-4.7L3.3 6.7 8 6z" stroke="#3D8A5A" stroke-width="0.6" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="s1-remind-text">
+                <span class="s1-remind-title">上周手记已自动整理</span>
+                <span class="s1-remind-sub">每周一自动生成 · 按真实日期归类归档</span>
+              </span>
+              <svg class="s1-remind-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="m6 4 4 4-4 4" stroke="#3D8A5A" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+
+            <div id="s1-notes"></div>
+          </div>
+
+          <button class="fab fab-green" data-nav="screen-2" aria-label="新建记录">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M14 4l6 6L9 21H3v-6L14 4z" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/><path d="M13 5l6 6" stroke="#fff" stroke-width="1.8"/></svg>
+          </button>
+
+          <nav class="tab-bar">
+            <div class="tab-divider"></div>
+            <div class="tab-content">
+              <div class="tab tab-active" data-nav="screen-1">
+                <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M5 4h9l3 3v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" stroke="#3D8A5A" stroke-width="1.6" stroke-linejoin="round" fill="#3D8A5A" fill-opacity="0.08"/><path d="M14 4v3h3" stroke="#3D8A5A" stroke-width="1.6" stroke-linejoin="round"/></svg>
+                <span>随记</span>
+              </div>
+              <div class="tab" data-nav="screen-4">
+                <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="3" y="6" width="16" height="12" rx="2" stroke="#6D6C6A" stroke-width="1.6"/><path d="M3 10h16" stroke="#6D6C6A" stroke-width="1.6"/></svg>
+                <span>记账</span>
+              </div>
+              <div class="tab" data-nav="screen-8">
+                <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="8" r="3.5" stroke="#6D6C6A" stroke-width="1.6"/><path d="M4 18c1.5-3.5 4.5-5 7-5s5.5 1.5 7 5" stroke="#6D6C6A" stroke-width="1.6" stroke-linecap="round"/></svg>
+                <span>我的</span>
+              </div>
+            </div>
+            <div class="safe-area"><div class="home-indicator"></div></div>
+          </nav>
+
+          <!-- 长按手记操作菜单 -->
+          <div class="bottom-sheet" id="s1-ctx" hidden>
+            <div class="sheet-mask" data-ctx-close></div>
+            <div class="sheet-card">
+              <div class="sheet-title" id="s1-ctx-title">选择操作</div>
+              <button class="ctx-item" data-ctx="pin">置顶到顶部</button>
+              <button class="ctx-item ctx-danger" data-ctx="del">删除这条手记</button>
+              <button class="sheet-cancel" data-ctx-close>取消</button>
+            </div>
+          </div>
+
+        </section>
+
+        <!-- ============== Screen 2: 记录编辑 ============== -->
+        <section class="screen" id="screen-2" data-name="02 随记 · 记录编辑">
+          <div class="status-bar">
+            <span class="time">9:41</span>
+            <div class="status-icons">
+              <svg width="18" height="12" viewBox="0 0 18 12"><path d="M1 9h2v3H1zM5 7h2v5H5zM9 4h2v8H9zM13 1h2v11h-2z" fill="#1A1918"/></svg>
+              <svg width="16" height="12" viewBox="0 0 16 12"><path d="M8 2.4c2.1 0 4 .8 5.5 2.1l1.1-1.1A8.9 8.9 0 0 0 8 .5 8.9 8.9 0 0 0 1.4 3.4l1.1 1.1A7.7 7.7 0 0 1 8 2.4zm0 3.2c1.2 0 2.3.4 3.1 1.1l1.1-1.1A6 6 0 0 0 8 3.7a6 6 0 0 0-4.2 1.9l1.1 1.1A4.4 4.4 0 0 1 8 5.6zm0 3.2c.4 0 .8.1 1.1.4l1.1-1.1A3.6 3.6 0 0 0 8 6.9a3.6 3.6 0 0 0-2.2 1.2l1.1 1.1c.3-.3.7-.4 1.1-.4z" fill="#1A1918"/></svg>
+              <svg width="26" height="12" viewBox="0 0 26 12"><rect x="0.5" y="1.5" width="22" height="9" rx="2" stroke="#1A1918" fill="none"/><rect x="2" y="3" width="18" height="6" rx="1" fill="#1A1918"/><rect x="23.5" y="4.5" width="1.5" height="3" rx="0.5" fill="#1A1918"/></svg>
+            </div>
+          </div>
+
+          <nav class="nav-bar">
+            <button class="nav-back" data-nav="screen-1" aria-label="返回">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M12 4 6 10l6 6" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div class="nav-title">
+              <div class="nav-title-main">7月28日 周二</div>
+              <div class="nav-title-sub">18:42 开始书写</div>
+            </div>
+            <button class="nav-done" data-nav="screen-1">完成</button>
+          </nav>
+
+          <div class="scroll-area s2-scroll" id="s2-scroll">
+            <div class="s2-editor" id="s2-editor" contenteditable="true" data-placeholder="此刻在想什么？随手记一笔…"></div>
+            <div class="s2-media-tray" id="s2-tray"></div>
+            <div class="s2-sig">
+              <div class="s2-sig-main">
+                <span class="s2-time" id="s2-time">18:47</span>
+                <span class="s2-date-ms" id="s2-date">2026.07.28 周二</span>
+              </div>
+              <div class="s2-sig-place" id="s2-place">写于 位置待授权</div>
+              <div class="s2-sig-auto"><span id="s2-loc-hint">结束记录时自动生成 · 点"定位"获取地点</span></div>
+            </div>
+          </div>
+
+          <div class="toolbar">
+            <div class="tool-row">
+              <button class="tool tool-active" id="tool-text" aria-label="文字">
+                <span class="tool-letter">T</span>
+              </button>
+              <button class="tool" id="tool-photo" aria-label="图片">
+                <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="2.5" y="4.5" width="17" height="13" rx="2" stroke="#6D6C6A" stroke-width="1.6"/><circle cx="8" cy="9" r="1.5" fill="#6D6C6A"/><path d="m4 15 4-4 4 3 3-2 3 3" stroke="#6D6C6A" stroke-width="1.6" stroke-linejoin="round"/></svg>
+              </button>
+              <button class="tool" id="tool-video" aria-label="视频">
+                <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="2.5" y="5.5" width="13" height="11" rx="2" stroke="#6D6C6A" stroke-width="1.6"/><path d="m15.5 9.5 4-2v7l-4-2z" stroke="#6D6C6A" stroke-width="1.6" stroke-linejoin="round"/></svg>
+              </button>
+              <button class="tool" id="tool-draw" aria-label="画笔">
+                <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M16 3 19 6 9 16l-4 1 1-4z" stroke="#6D6C6A" stroke-width="1.6" stroke-linejoin="round"/></svg>
+              </button>
+              <button class="tool" id="tool-loc" aria-label="定位">
+                <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M11 19s-7-5.5-7-11a7 7 0 1 1 14 0c0 5.5-7 11-7 11z" stroke="#6D6C6A" stroke-width="1.6" stroke-linejoin="round"/><circle cx="11" cy="8" r="2.5" stroke="#6D6C6A" stroke-width="1.6"/></svg>
+              </button>
+              <button class="tool" id="tool-undo" aria-label="撤销上一步文字">
+                <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M9 6 5 10l4 4" stroke="#6D6C6A" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 10h7a5 5 0 0 1 0 10h-3" stroke="#6D6C6A" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
+            <div class="safe-area"></div>
+          </div>
+
+          <!-- 绘图弹层 -->
+          <div class="draw-modal" id="drawModal">
+            <div class="draw-sheet">
+              <div class="draw-head">
+                <span class="draw-title">随手画</span>
+                <button class="draw-close" id="drawClose">完成</button>
+              </div>
+              <canvas id="drawCanvas" class="draw-canvas"></canvas>
+              <div class="draw-tools">
+                <div class="draw-colors" id="drawColors">
+                  <button class="dc" data-c="#1A1918" style="background:#1A1918"></button>
+                  <button class="dc" data-c="#FFFFFF" style="background:#FFFFFF"></button>
+                  <button class="dc" data-c="#E5484D" style="background:#E5484D"></button>
+                  <button class="dc" data-c="#F08C2E" style="background:#F08C2E"></button>
+                  <button class="dc" data-c="#F2C14E" style="background:#F2C14E"></button>
+                  <button class="dc" data-c="#A7D3F0" style="background:#A7D3F0"></button>
+                  <button class="dc" data-c="#4A7BC4" style="background:#4A7BC4"></button>
+                  <button class="dc" data-c="#3D8A5A" style="background:#3D8A5A"></button>
+                  <button class="dc" data-c="#D08068" style="background:#D08068"></button>
+                  <button class="dc" data-c="#9B6BB0" style="background:#9B6BB0"></button>
+                  <button class="dc" data-c="#9A9894" style="background:#9A9894"></button>
+                  <button class="dc" data-c="#B08968" style="background:#B08968"></button>
+                </div>
+                <div class="draw-sizes" id="drawSizes">
+                  <button class="ds" data-s="2">细</button>
+                  <button class="ds" data-s="4">中</button>
+                  <button class="ds" data-s="8">粗</button>
+                </div>
+              </div>
+              <div class="draw-actions">
+                <button class="draw-btn draw-undo" id="drawUndo">撤销</button>
+                <button class="draw-btn draw-clear" id="drawClear">清除</button>
+                <button class="draw-btn draw-save" id="drawSave">保存到记录</button>
+              </div>
+            </div>
+          </div>
+
+          <input type="file" id="capPhotoBack" accept="image/*" capture="environment" class="sui-file-off" />
+          <input type="file" id="capPhotoAlbum" accept="image/*" class="sui-file-off" />
+          <input type="file" id="capVideoBack" accept="video/*" capture="environment" class="sui-file-off" />
+          <input type="file" id="capVideoFront" accept="video/*" capture="user" class="sui-file-off" />
+          <input type="file" id="capVideoAlbum" accept="video/*" class="sui-file-off" />
+
+          <div class="capture-sheet" id="captureSheet" hidden>
+            <div class="sheet-mask" data-cap-close></div>
+            <div class="sheet-card">
+              <div class="sheet-title" id="capTitle">选择来源</div>
+              <div class="cap-opts" id="capOpts"></div>
+              <button class="sheet-cancel" data-cap-close>取消</button>
+            </div>
+          </div>
+
+          <!-- 视频拍摄弹层 -->
+          <div class="rec-modal" id="recModal" hidden>
+            <div class="rec-sheet">
+              <div class="rec-head">
+                <span class="rec-title">拍摄视频 · 最长 60 秒</span>
+                <button class="rec-close" id="recClose" aria-label="关闭">✕</button>
+              </div>
+              <div class="rec-stage">
+                <video class="rec-preview" id="recPreview" autoplay muted playsinline></video>
+                <div class="rec-timer" id="recTimer">0:00 / 1:00</div>
+              </div>
+              <div class="rec-actions">
+                <button class="rec-btn rec-album" id="recAlbum">相册</button>
+                <button class="rec-btn rec-shoot" id="recShoot">● 拍摄</button>
+                <button class="rec-btn rec-stop" id="recStop" hidden>■ 停止拍摄</button>
+                <button class="rec-btn rec-retake" id="recRetake" hidden>重拍</button>
+                <button class="rec-btn rec-use" id="recUse" hidden>使用</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============== Screen 3: 周整理报告 ============== -->
+        <section class="screen" id="screen-3" data-name="03 随记 · 周整理报告">
+          <div class="status-bar">
+            <span class="time">9:41</span>
+            <div class="status-icons">
+              <svg width="18" height="12" viewBox="0 0 18 12"><path d="M1 9h2v3H1zM5 7h2v5H5zM9 4h2v8H9zM13 1h2v11h-2z" fill="#1A1918"/></svg>
+              <svg width="16" height="12" viewBox="0 0 16 12"><path d="M8 2.4c2.1 0 4 .8 5.5 2.1l1.1-1.1A8.9 8.9 0 0 0 8 .5 8.9 8.9 0 0 0 1.4 3.4l1.1 1.1A7.7 7.7 0 0 1 8 2.4zm0 3.2c1.2 0 2.3.4 3.1 1.1l1.1-1.1A6 6 0 0 0 8 3.7a6 6 0 0 0-4.2 1.9l1.1 1.1A4.4 4.4 0 0 1 8 5.6zm0 3.2c.4 0 .8.1 1.1.4l1.1-1.1A3.6 3.6 0 0 0 8 6.9a3.6 3.6 0 0 0-2.2 1.2l1.1 1.1c.3-.3.7-.4 1.1-.4z" fill="#1A1918"/></svg>
+              <svg width="26" height="12" viewBox="0 0 26 12"><rect x="0.5" y="1.5" width="22" height="9" rx="2" stroke="#1A1918" fill="none"/><rect x="2" y="3" width="18" height="6" rx="1" fill="#1A1918"/><rect x="23.5" y="4.5" width="1.5" height="3" rx="0.5" fill="#1A1918"/></svg>
+            </div>
+          </div>
+
+          <nav class="nav-bar">
+            <button class="nav-back" data-nav="screen-1" aria-label="返回">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M12 4 6 10l6 6" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div class="pill-wrap">
+              <button type="button" class="month-pill" id="s3-week-btn" data-drop-btn aria-label="选择往期周报">
+                <span id="s3-week-label">第 30 周</span>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="m3 5 4 4 4-4" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <div class="inline-drop" id="s3-week-drop" hidden></div>
+            </div>
+            <div class="nav-spacer"></div>
+            <button class="nav-icon" id="s3-share" aria-label="分享">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 14.5V4" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round"/><path d="M8.5 7 12 3.5l3.5 3.5" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M5.5 11.5V19a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-7.5" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </nav>
+
+          <div class="scroll-area"><div id="s3-report"></div></div>
+        </section>
+
+        <!-- ============== Screen 4: 记账主页 ============== -->
+        <section class="screen" id="screen-4" data-name="04 记账 · 主页">
+          <div class="status-bar">
+            <span class="time">9:41</span>
+            <div class="status-icons">
+              <svg width="18" height="12" viewBox="0 0 18 12"><path d="M1 9h2v3H1zM5 7h2v5H5zM9 4h2v8H9zM13 1h2v11h-2z" fill="#1A1918"/></svg>
+              <svg width="16" height="12" viewBox="0 0 16 12"><path d="M8 2.4c2.1 0 4 .8 5.5 2.1l1.1-1.1A8.9 8.9 0 0 0 8 .5 8.9 8.9 0 0 0 1.4 3.4l1.1 1.1A7.7 7.7 0 0 1 8 2.4zm0 3.2c1.2 0 2.3.4 3.1 1.1l1.1-1.1A6 6 0 0 0 8 3.7a6 6 0 0 0-4.2 1.9l1.1 1.1A4.4 4.4 0 0 1 8 5.6zm0 3.2c.4 0 .8.1 1.1.4l1.1-1.1A3.6 3.6 0 0 0 8 6.9a3.6 3.6 0 0 0-2.2 1.2l1.1 1.1c.3-.3.7-.4 1.1-.4z" fill="#1A1918"/></svg>
+              <svg width="26" height="12" viewBox="0 0 26 12"><rect x="0.5" y="1.5" width="22" height="9" rx="2" stroke="#1A1918" fill="none"/><rect x="2" y="3" width="18" height="6" rx="1" fill="#1A1918"/><rect x="23.5" y="4.5" width="1.5" height="3" rx="0.5" fill="#1A1918"/></svg>
+            </div>
+          </div>
+
+          <nav class="nav-bar">
+            <div class="pill-wrap">
+              <button type="button" class="month-pill" id="s4-month-btn" data-drop-btn aria-label="选择月份">
+                <span id="s4-month-label">2026 年 7 月</span>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="m3 5 4 4 4-4" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <div class="inline-drop" id="s4-month-drop" hidden></div>
+            </div>
+            <button class="nav-icon" id="s4-menu-btn" aria-label="更多">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 6h14M3 10h14M3 14h14" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round"/></svg>
+            </button>
+          </nav>
+
+          <!-- 记账主页 · 更多菜单（汉堡） -->
+          <div class="s4-menu" id="s4-menu" hidden>
+            <button class="s4-menu-item" data-act="month">月度收支分析</button>
+            <button class="s4-menu-item" data-act="week">本周账单</button>
+            <button class="s4-menu-item" data-act="export">导出本月账单</button>
+            <button class="s4-menu-item" data-act="about">关于记账</button>
+          </div>
+
+          <div class="scroll-area">
+            <div class="s4-persist">
+              <span class="s4-persist-icon">
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M9 2.5l5 2v4c0 3-2.2 5.8-5 7-2.8-1.2-5-4-5-7v-4z" stroke="#D08068" stroke-width="1.5" stroke-linejoin="round"/><path d="m6.5 9 1.8 1.8L12 7" stroke="#D08068" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="s4-persist-text">每日账单、每周收支分析与每月月度汇总都会<strong>永久留存</strong>在「记账」，随时可查。</span>
+            </div>
+
+            <div class="card month-card">
+              <div class="month-label">本月支出</div>
+              <div class="month-amount" id="m-exp">¥ 0.00</div>
+              <div class="month-sub">
+                <div class="sub-card sub-green">
+                  <div class="sub-label">收入</div>
+                  <div class="sub-amount" id="m-inc">¥ 0.00</div>
+                </div>
+                <div class="sub-card sub-coral">
+                  <div class="sub-label">结余</div>
+                  <div class="sub-amount" id="m-bal">¥ 0.00</div>
+                </div>
+              </div>
+            </div>
+
+            <div id="s4-bills"></div>
+
+            <button class="week-tip" data-nav="screen-6">
+              <span class="week-tip-icon">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="m8 1 1.8 3.7L14 5.3l-3 2.9.7 4.1L8 10.4 4.3 12.3l.7-4.1-3-2.9 4.2-.6z" fill="#3D8A5A"/></svg>
+              </span>
+              <span class="week-tip-text">
+                <span class="week-tip-title">周账单已生成</span>
+                <span class="week-tip-sub">查看第 30 周支出与分类分析 →</span>
+              </span>
+            </button>
+
+            <div class="section-label">往期周账单 · 已永久留存</div>
+            <div class="arc-list" id="s4-weekly-archive"></div>
+
+            <div class="section-label">月度收支分析 · 已永久留存</div>
+            <button class="arc-item arc-feature" data-month="mb7">
+              <div class="arc-main">
+                <div class="arc-week">2026 年 7 月 · 月度收支分析</div>
+                <div class="arc-meta">支出 ¥12,860 · 收入 ¥51,200 · 结余 +¥38,340</div>
+              </div>
+              <svg class="arc-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="m6 4 4 4-4 4" stroke="#D08068" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div class="arc-list" id="s4-monthly-archive"></div>
+          </div>
+
+          <button class="fab fab-coral" data-nav="screen-5" aria-label="新建记账">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+
+          <nav class="tab-bar">
+            <div class="tab-divider"></div>
+            <div class="tab-content">
+              <div class="tab" data-nav="screen-1">
+                <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M5 4h9l3 3v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" stroke="#6D6C6A" stroke-width="1.6" stroke-linejoin="round"/><path d="M14 4v3h3" stroke="#6D6C6A" stroke-width="1.6" stroke-linejoin="round"/></svg>
+                <span>随记</span>
+              </div>
+              <div class="tab tab-active" data-nav="screen-4">
+                <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="3" y="6" width="16" height="12" rx="2" stroke="#D08068" stroke-width="1.6" fill="#D08068" fill-opacity="0.08"/><path d="M3 10h16" stroke="#D08068" stroke-width="1.6"/></svg>
+                <span>记账</span>
+              </div>
+              <div class="tab" data-nav="screen-8">
+                <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="8" r="3.5" stroke="#6D6C6A" stroke-width="1.6"/><path d="M4 18c1.5-3.5 4.5-5 7-5s5.5 1.5 7 5" stroke="#6D6C6A" stroke-width="1.6" stroke-linecap="round"/></svg>
+                <span>我的</span>
+              </div>
+            </div>
+            <div class="safe-area"><div class="home-indicator"></div></div>
+          </nav>
+        </section>
+
+        <!-- ============== Screen 5: 记账录入 ============== -->
+        <section class="screen" id="screen-5" data-name="05 记账 · 录入">
+          <div class="status-bar">
+            <span class="time">9:41</span>
+            <div class="status-icons">
+              <svg width="18" height="12" viewBox="0 0 18 12"><path d="M1 9h2v3H1zM5 7h2v5H5zM9 4h2v8H9zM13 1h2v11h-2z" fill="#1A1918"/></svg>
+              <svg width="16" height="12" viewBox="0 0 16 12"><path d="M8 2.4c2.1 0 4 .8 5.5 2.1l1.1-1.1A8.9 8.9 0 0 0 8 .5 8.9 8.9 0 0 0 1.4 3.4l1.1 1.1A7.7 7.7 0 0 1 8 2.4zm0 3.2c1.2 0 2.3.4 3.1 1.1l1.1-1.1A6 6 0 0 0 8 3.7a6 6 0 0 0-4.2 1.9l1.1 1.1A4.4 4.4 0 0 1 8 5.6zm0 3.2c.4 0 .8.1 1.1.4l1.1-1.1A3.6 3.6 0 0 0 8 6.9a3.6 3.6 0 0 0-2.2 1.2l1.1 1.1c.3-.3.7-.4 1.1-.4z" fill="#1A1918"/></svg>
+              <svg width="26" height="12" viewBox="0 0 26 12"><rect x="0.5" y="1.5" width="22" height="9" rx="2" stroke="#1A1918" fill="none"/><rect x="2" y="3" width="18" height="6" rx="1" fill="#1A1918"/><rect x="23.5" y="4.5" width="1.5" height="3" rx="0.5" fill="#1A1918"/></svg>
+            </div>
+          </div>
+
+          <nav class="nav-bar nav-bar-s5">
+            <button class="nav-back" data-nav="screen-4" aria-label="关闭">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="m4 4 10 10M14 4 4 14" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round"/></svg>
+            </button>
+            <button class="nav-save" data-nav="screen-4">保存</button>
+          </nav>
+
+          <div class="scroll-area s5-top">
+            <div class="s5-tabs">
+              <div class="s5-tab s5-tab-active">支出</div>
+              <div class="s5-tab">收入</div>
+            </div>
+            <div class="s5-amount">
+              <div class="s5-amount-main">¥<span id="s5-amount-val">0</span></div>
+              <div class="s5-amount-sub" id="s5-amount-sub">餐饮 · 记录</div>
+            </div>
+            <div class="s5-grid">
+              <div id="s5-expense-cats">
+              <div class="s5-row">
+                <div class="s5-cat s5-cat-active">
+                  <div class="s5-cat-circle s5-cat-circle-coral">
+                    <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="M7 9h12l-1 11a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1z" stroke="#D08068" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 9V7a4 4 0 0 1 8 0v2" stroke="#D08068" stroke-width="1.6"/></svg>
+                  </div>
+                  <div class="s5-cat-name">餐饮</div>
+                </div>
+                <div class="s5-cat">
+                  <div class="s5-cat-circle">
+                    <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><rect x="3.5" y="7.5" width="19" height="11" rx="1.5" stroke="#6D6C6A" stroke-width="1.6"/><circle cx="8" cy="17" r="1.4" fill="#6D6C6A"/><circle cx="18" cy="17" r="1.4" fill="#6D6C6A"/><path d="M9 7.5h8" stroke="#6D6C6A" stroke-width="1.6"/></svg>
+                  </div>
+                  <div class="s5-cat-name">交通</div>
+                </div>
+                <div class="s5-cat">
+                  <div class="s5-cat-circle">
+                    <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="M8 8h10l1 1v13a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V9z" stroke="#9B6BB0" stroke-width="1.6" stroke-linejoin="round"/><path d="M7 8V6h12v2" stroke="#9B6BB0" stroke-width="1.6" stroke-linejoin="round"/><path d="M11 12v6M15 12v6" stroke="#9B6BB0" stroke-width="1.6" stroke-linecap="round"/></svg>
+                  </div>
+                  <div class="s5-cat-name">购物</div>
+                </div>
+                <div class="s5-cat">
+                  <div class="s5-cat-circle">
+                    <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><circle cx="13" cy="13" r="8" stroke="#C9A23B" stroke-width="1.6"/><path d="M13 9v2M13 16h.01M11 13.5a2 2 0 0 1 4 0c0 1.5-2 1.5-2 3" stroke="#C9A23B" stroke-width="1.6" stroke-linecap="round"/></svg>
+                  </div>
+                  <div class="s5-cat-name">娱乐</div>
+                </div>
+              </div>
+              <div class="s5-row">
+                <div class="s5-cat">
+                  <div class="s5-cat-circle">
+                    <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="M5 13 13 5l8 8v8H5z" stroke="#B08968" stroke-width="1.6" stroke-linejoin="round"/><path d="M11 21v-5h4v5" stroke="#B08968" stroke-width="1.6" stroke-linejoin="round"/></svg>
+                  </div>
+                  <div class="s5-cat-name">居家</div>
+                </div>
+                <div class="s5-cat">
+                  <div class="s5-cat-circle">
+                    <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="M13 21s-8-6-8-12a4 4 0 0 1 8-1 4 4 0 0 1 8 1c0 6-8 12-8 12z" stroke="#E58FA0" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 12h8" stroke="#E58FA0" stroke-width="1.6" stroke-linecap="round"/></svg>
+                  </div>
+                  <div class="s5-cat-name">医疗</div>
+                </div>
+                <div class="s5-cat">
+                  <div class="s5-cat-circle">
+                    <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="M3 10 13 6l10 4-10 4z" stroke="#3D8A5A" stroke-width="1.6" stroke-linejoin="round"/><path d="M7 12v4c0 2 13 2 13 0v-4M5 16v3M21 16v3" stroke="#3D8A5A" stroke-width="1.6" stroke-linecap="round"/></svg>
+                  </div>
+                  <div class="s5-cat-name">学习</div>
+                </div>
+                <div class="s5-cat">
+                  <div class="s5-cat-circle">
+                    <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="m13 3 2.7 5.6 6.2.9-4.5 4.3 1.1 6.1L13 17.2 7.5 19.9l1.1-6.1L4.1 9.5l6.2-.9z" stroke="#9B6BB0" stroke-width="1.6" stroke-linejoin="round"/></svg>
+                  </div>
+                  <div class="s5-cat-name">人情</div>
+                </div>
+              </div>
+              </div>
+              <div id="s5-income-cats" hidden>
+                <div class="s5-row">
+                  <div class="s5-cat s5-cat-active">
+                    <div class="s5-cat-circle"><svg width="26" height="26" viewBox="0 0 26 26" fill="none"><rect x="3.5" y="7.5" width="19" height="12" rx="2" stroke="#3D8A5A" stroke-width="1.6"/><path d="M3.5 12h19" stroke="#3D8A5A" stroke-width="1.6"/></svg></div>
+                    <div class="s5-cat-name">工资</div>
+                  </div>
+                  <div class="s5-cat">
+                    <div class="s5-cat-circle"><svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="M13 3v16M8 7h10" stroke="#3D8A5A" stroke-width="1.6" stroke-linecap="round"/><circle cx="13" cy="17" r="5" stroke="#3D8A5A" stroke-width="1.6"/></svg></div>
+                    <div class="s5-cat-name">兼职</div>
+                  </div>
+                  <div class="s5-cat">
+                    <div class="s5-cat-circle"><svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="M4 17l5-6 4 4 5-8" stroke="#3D8A5A" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 7h4v4" stroke="#3D8A5A" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+                    <div class="s5-cat-name">理财</div>
+                  </div>
+                  <div class="s5-cat">
+                    <div class="s5-cat-circle"><svg width="26" height="26" viewBox="0 0 26 26" fill="none"><rect x="4" y="9" width="18" height="12" rx="2" stroke="#3D8A5A" stroke-width="1.6"/><path d="M4 13h18M13 9v12" stroke="#3D8A5A" stroke-width="1.6"/></svg></div>
+                    <div class="s5-cat-name">红包</div>
+                  </div>
+                </div>
+                <div class="s5-row">
+                  <div class="s5-cat">
+                    <div class="s5-cat-circle"><svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="m13 4 2.4 5 5.4.6-4 3.8.9 5.4L13 16.6 8.3 18.8 9.2 13.4 5.2 9.6 10.6 9z" stroke="#3D8A5A" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
+                    <div class="s5-cat-name">奖金</div>
+                  </div>
+                  <div class="s5-cat">
+                    <div class="s5-cat-circle"><svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="M7 3h8l4 4v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" stroke="#3D8A5A" stroke-width="1.6" stroke-linejoin="round"/><path d="M14 3v4h4M9 13h6M9 16h6" stroke="#3D8A5A" stroke-width="1.6" stroke-linecap="round"/></svg></div>
+                    <div class="s5-cat-name">报销</div>
+                  </div>
+                  <div class="s5-cat">
+                    <div class="s5-cat-circle"><svg width="26" height="26" viewBox="0 0 26 26" fill="none"><circle cx="13" cy="13" r="8" stroke="#3D8A5A" stroke-width="1.6"/><path d="M13 9v8M10.5 11.5a2.5 2.5 0 0 1 5 0c0 2-5 1.5-5 4" stroke="#3D8A5A" stroke-width="1.4" stroke-linecap="round"/></svg></div>
+                    <div class="s5-cat-name">利息</div>
+                  </div>
+                  <div class="s5-cat">
+                    <div class="s5-cat-circle"><svg width="26" height="26" viewBox="0 0 26 26" fill="none"><circle cx="8" cy="13" r="1.6" fill="#3D8A5A"/><circle cx="13" cy="13" r="1.6" fill="#3D8A5A"/><circle cx="18" cy="13" r="1.6" fill="#3D8A5A"/></svg></div>
+                    <div class="s5-cat-name">其他</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="s5-note">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="m14 4-9 9-2 1 1-2 9-9z" stroke="#6D6C6A" stroke-width="1.4" stroke-linejoin="round"/><path d="M11 3l4 4" stroke="#6D6C6A" stroke-width="1.4"/></svg>
+              <textarea id="s5-note-input" class="s5-note-input" placeholder="添加备注（可选）" rows="1" maxlength="60"></textarea>
+            </div>
+          </div>
+
+          <div class="keypad">
+            <div class="kp-row">
+              <button class="kp kp-num">1</button>
+              <button class="kp kp-num">2</button>
+              <button class="kp kp-num">3</button>
+                <button class="kp kp-func" data-key="del">
+                  <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="6" y="5" width="10" height="14" rx="1.5" stroke="#D08068" stroke-width="1.6"/><path d="m9 11 4 4M13 11l-4 4" stroke="#D08068" stroke-width="1.6" stroke-linecap="round"/></svg>
+                  </button>
+            </div>
+            <div class="kp-row">
+              <button class="kp kp-num">4</button>
+              <button class="kp kp-num">5</button>
+              <button class="kp kp-num">6</button>
+              <button class="kp kp-func" data-key="add">+</button>
+            </div>
+            <div class="kp-row">
+              <button class="kp kp-num">7</button>
+              <button class="kp kp-num">8</button>
+              <button class="kp kp-num">9</button>
+              <button class="kp kp-func" data-key="sub">−</button>
+            </div>
+            <div class="kp-row">
+              <button class="kp kp-num">.</button>
+              <button class="kp kp-num">0</button>
+              <button class="kp kp-func kp-date" id="s5-date-btn" data-key="date" title="点击选择记账日期（默认记入当前查看的月份）" aria-label="选择记账日期">
+                <span class="kp-date-num">30</span><span class="kp-date-cap">日</span>
+              </button>
+              <button class="kp kp-ok" data-key="ok">记</button>
+            </div>
+            <div class="safe-area"><div class="home-indicator"></div></div>
+          </div>
+
+          <input type="date" id="s5-date-input" hidden />
+        </section>
+
+        <!-- ============== Screen 6: 周账单 ============== -->
+        <section class="screen" id="screen-6" data-name="06 记账 · 周账单">
+          <div class="status-bar">
+            <span class="time">9:41</span>
+            <div class="status-icons">
+              <svg width="18" height="12" viewBox="0 0 18 12"><path d="M1 9h2v3H1zM5 7h2v5H5zM9 4h2v8H9zM13 1h2v11h-2z" fill="#1A1918"/></svg>
+              <svg width="16" height="12" viewBox="0 0 16 12"><path d="M8 2.4c2.1 0 4 .8 5.5 2.1l1.1-1.1A8.9 8.9 0 0 0 8 .5 8.9 8.9 0 0 0 1.4 3.4l1.1 1.1A7.7 7.7 0 0 1 8 2.4zm0 3.2c1.2 0 2.3.4 3.1 1.1l1.1-1.1A6 6 0 0 0 8 3.7a6 6 0 0 0-4.2 1.9l1.1 1.1A4.4 4.4 0 0 1 8 5.6zm0 3.2c.4 0 .8.1 1.1.4l1.1-1.1A3.6 3.6 0 0 0 8 6.9a3.6 3.6 0 0 0-2.2 1.2l1.1 1.1c.3-.3.7-.4 1.1-.4z" fill="#1A1918"/></svg>
+              <svg width="26" height="12" viewBox="0 0 26 12"><rect x="0.5" y="1.5" width="22" height="9" rx="2" stroke="#1A1918" fill="none"/><rect x="2" y="3" width="18" height="6" rx="1" fill="#1A1918"/><rect x="23.5" y="4.5" width="1.5" height="3" rx="0.5" fill="#1A1918"/></svg>
+            </div>
+          </div>
+
+          <nav class="nav-bar">
+            <button class="nav-back" data-nav="screen-4" aria-label="返回">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M12 4 6 10l6 6" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div class="pill-wrap">
+              <button type="button" class="month-pill" id="s6-week-btn" data-drop-btn aria-label="选择往期周账单">
+                <span id="s6-week-label">第 30 周 · 周账单</span>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="m3 5 4 4 4-4" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <div class="inline-drop" id="s6-week-drop" hidden></div>
+            </div>
+            <div class="nav-spacer"></div>
+            <button class="nav-icon" id="s6-share" aria-label="分享">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 14.5V4" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round"/><path d="M8.5 7 12 3.5l3.5 3.5" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M5.5 11.5V19a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-7.5" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </nav>
+
+          <div class="scroll-area"><div id="s6-report"></div></div>
+        </section>
+
+        <!-- ============== Screen 7: 月度收支分析 ============== -->
+        <section class="screen" id="screen-7" data-name="07 记账 · 月度收支分析">
+          <div class="status-bar">
+            <span class="time">9:41</span>
+            <div class="status-icons">
+              <svg width="18" height="12" viewBox="0 0 18 12"><path d="M1 9h2v3H1zM5 7h2v5H5zM9 4h2v8H9zM13 1h2v11h-2z" fill="#1A1918"/></svg>
+              <svg width="16" height="12" viewBox="0 0 16 12"><path d="M8 2.4c2.1 0 4 .8 5.5 2.1l1.1-1.1A8.9 8.9 0 0 0 8 .5 8.9 8.9 0 0 0 1.4 3.4l1.1 1.1A7.7 7.7 0 0 1 8 2.4zm0 3.2c1.2 0 2.3.4 3.1 1.1l1.1-1.1A6 6 0 0 0 8 3.7a6 6 0 0 0-4.2 1.9l1.1 1.1A4.4 4.4 0 0 1 8 5.6zm0 3.2c.4 0 .8.1 1.1.4l1.1-1.1A3.6 3.6 0 0 0 8 6.9a3.6 3.6 0 0 0-2.2 1.2l1.1 1.1c.3-.3.7-.4 1.1-.4z" fill="#1A1918"/></svg>
+              <svg width="26" height="12" viewBox="0 0 26 12"><rect x="0.5" y="1.5" width="22" height="9" rx="2" stroke="#1A1918" fill="none"/><rect x="2" y="3" width="18" height="6" rx="1" fill="#1A1918"/><rect x="23.5" y="4.5" width="1.5" height="3" rx="0.5" fill="#1A1918"/></svg>
+            </div>
+          </div>
+
+          <nav class="nav-bar">
+            <button class="nav-back" data-nav="screen-4" aria-label="返回">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M12 4 6 10l6 6" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div class="pill-wrap">
+              <button type="button" class="month-pill" id="s7-month-btn" data-drop-btn aria-label="选择往期月度收支">
+                <span id="s7-month-label">2026 年 7 月 · 月度收支</span>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="m3 5 4 4 4-4" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <div class="inline-drop" id="s7-month-drop" hidden></div>
+            </div>
+            <div class="nav-spacer"></div>
+            <button class="nav-icon" id="s7-share" aria-label="分享">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 14.5V4" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round"/><path d="M8.5 7 12 3.5l3.5 3.5" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M5.5 11.5V19a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-7.5" stroke="#1A1918" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </nav>
+
+          <div class="scroll-area"><div id="s7-report"></div></div>
+        </section>
+
+        <!-- ============== Screen 8: 我的 ============== -->
+        <section class="screen" id="screen-8" data-name="08 我的">
+          <div class="status-bar">
+            <span class="time">9:41</span>
+            <div class="status-icons">
+              <svg width="18" height="12" viewBox="0 0 18 12"><path d="M1 9h2v3H1zM5 7h2v5H5zM9 4h2v8H9zM13 1h2v11h-2z" fill="#1A1918"/></svg>
+              <svg width="16" height="12" viewBox="0 0 16 12"><path d="M8 2.4c2.1 0 4 .8 5.5 2.1l1.1-1.1A8.9 8.9 0 0 0 8 .5 8.9 8.9 0 0 0 1.4 3.4l1.1 1.1A7.7 7.7 0 0 1 8 2.4zm0 3.2c1.2 0 2.3.4 3.1 1.1l1.1-1.1A6 6 0 0 0 8 3.7a6 6 0 0 0-4.2 1.9l1.1 1.1A4.4 4.4 0 0 1 8 5.6zm0 3.2c.4 0 .8.1 1.1.4l1.1-1.1A3.6 3.6 0 0 0 8 6.9a3.6 3.6 0 0 0-2.2 1.2l1.1 1.1c.3-.3.7-.4 1.1-.4z" fill="#1A1918"/></svg>
+              <svg width="26" height="12" viewBox="0 0 26 12"><rect x="0.5" y="1.5" width="22" height="9" rx="2" stroke="#1A1918" fill="none"/><rect x="2" y="3" width="18" height="6" rx="1" fill="#1A1918"/><rect x="23.5" y="4.5" width="1.5" height="3" rx="0.5" fill="#1A1918"/></svg>
+            </div>
+          </div>
+
+          <nav class="nav-bar">
+            <div class="nav-title"><div class="nav-title-main">我的</div></div>
+          </nav>
+
+          <div class="scroll-area s8-top">
+            <div class="s8-profile">
+              <div class="s8-avatar" id="s8-avatar">随</div>
+              <div class="s8-id">
+                <input class="s8-name" id="s8-name" maxlength="12" placeholder="你的昵称" />
+                <input class="s8-sign" id="s8-sign" maxlength="30" placeholder="写一句个性签名…" />
+              </div>
+            </div>
+            <div class="s8-avatar-actions">
+              <button type="button" class="s8-ava-btn" id="s8-ava-cam">拍照上传</button>
+              <button type="button" class="s8-ava-btn" id="s8-ava-album">从相册上传</button>
+            </div>
+            <input type="file" id="s8-ava-cam-input" accept="image/*" capture class="sui-file-off" />
+            <input type="file" id="s8-ava-album-input" accept="image/*" class="sui-file-off" />
+
+            <div class="s8-group">
+              <div class="s8-group-title">数据与存储</div>
+              <button class="s8-cell s8-cell-btn" id="s8-export"><span>导出全部数据</span><span class="s8-cell-val">JSON</span></button>
+              <button type="button" class="s8-cell s8-cell-btn" id="s8-import"><span>导入文件</span><span class="s8-cell-val">恢复备份</span></button>
+              <div class="s8-cell-note s8-import-note">导入会覆盖当前全部本地数据。请先点「导出全部数据」下载 JSON 备份，再点此选择该文件恢复。仅支持本应用导出的 JSON 文件。</div>
+              <button class="s8-cell s8-cell-btn s8-danger" id="s8-reset"><span>清空本地数据</span><span class="s8-cell-val">清空全部</span></button>
+              <input type="file" id="s8-import-file" accept="application/json" class="sui-file-off" />
+            </div>
+
+            <div class="s8-group">
+              <div class="s8-group-title">外观</div>
+              <div class="s8-seg" id="s8-theme">
+                <button class="s8-seg-item" data-theme="light">浅色</button>
+                <button class="s8-seg-item" data-theme="dark">深色</button>
+                <button class="s8-seg-item" data-theme="system">跟随系统</button>
+              </div>
+            </div>
+
+            <div class="s8-group">
+              <div class="s8-group-title">记账提醒</div>
+              <div class="s8-cell s8-cell-switch">
+                <span>每日记账提醒</span>
+                <label class="s8-switch"><input type="checkbox" id="s8-remind-on" /><span class="s8-switch-knob"></span></label>
+              </div>
+              <div class="s8-cell s8-cell-time">
+                <span>提醒时间</span>
+                <input type="time" id="s8-remind-time" value="21:00" />
+              </div>
+              <button class="s8-cell s8-cell-btn" id="s8-cal"><span>添加到系统日历</span><span class="s8-cell-val">每日提醒</span></button>
+              <div class="s8-cell-note">点击下方「添加到系统日历」后，会自动下载文件 <b>suisui-reminder.ics</b>。请在手机上点开该文件，并选择用「日历」应用打开，即可把每日记账提醒加入系统日历。受限于纯前端，浏览器无法自动写入，需你手动确认添加一次。</div>
+              <div class="s8-cell-note">开启后，每天到设定时间若当天尚未记账，会通过系统通知（需授权）与 App 内提示提醒你。受限于纯前端，提醒仅在 App 处于打开状态或浏览器后台保活时触发。</div>
+            </div>
+
+            <div class="s8-group">
+              <div class="s8-group-title">关于</div>
+              <div class="s8-cell"><span>版本</span><span class="s8-cell-val">1.0.0</span></div>
+            </div>
+            <div class="s8-about">所有记录（随记与账单）仅保存在你当前设备的浏览器本地，不会上传到任何服务器。换设备或清除浏览器数据前，请先用「导出全部数据」备份。</div>
+          </div>
+
+          <nav class="tab-bar">
+            <div class="tab-divider"></div>
+            <div class="tab-content">
+              <div class="tab" data-nav="screen-1">
+                <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M5 4h9l3 3v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" stroke="#6D6C6A" stroke-width="1.6" stroke-linejoin="round"/><path d="M14 4v3h3" stroke="#6D6C6A" stroke-width="1.6" stroke-linejoin="round"/></svg>
+                <span>随记</span>
+              </div>
+              <div class="tab" data-nav="screen-4">
+                <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="3" y="6" width="16" height="12" rx="2" stroke="#6D6C6A" stroke-width="1.6"/><path d="M3 10h16" stroke="#6D6C6A" stroke-width="1.6"/></svg>
+                <span>记账</span>
+              </div>
+              <div class="tab tab-active" data-nav="screen-8">
+                <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="8" r="3.5" stroke="#6D6C6A" stroke-width="1.6"/><path d="M4 18c1.5-3.5 4.5-5 7-5s5.5 1.5 7 5" stroke="#6D6C6A" stroke-width="1.6" stroke-linecap="round"/></svg>
+                <span>我的</span>
+              </div>
+            </div>
+            <div class="safe-area"><div class="home-indicator"></div></div>
+          </nav>
+        </section>
+
+      </div>
+    </div>
+
+    <footer class="page-footer">
+      <span class="hint">提示：点击屏幕内的按钮跳转；可点击右侧编号按钮切换屏幕。</span>
+      <button id="resetData" class="reset-btn" title="清除本地数据（清空全部）">清空本地数据</button>
+    </footer>
+  </div>
+
+  <!-- 通用确认弹层 -->
+  <div class="confirm-mask" id="confirmMask" hidden>
+    <div class="confirm-box">
+      <div class="confirm-title" id="confirmTitle">确认操作</div>
+      <div class="confirm-msg" id="confirmMsg"></div>
+      <div class="confirm-actions">
+        <button type="button" class="confirm-cancel" id="confirmCancel">取消</button>
+        <button type="button" class="confirm-ok" id="confirmOk">确认清空</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 头像裁剪弹层（置于顶层，独立于各屏，避免被非激活屏的 0 宽度影响） -->
+  <div class="ava-crop" id="avaCropModal" hidden>
+    <div class="ava-crop-mask" data-ava-crop-close></div>
+    <div class="ava-crop-sheet">
+      <div class="ava-crop-head">
+        <span class="ava-crop-title">裁剪头像</span>
+        <button class="ava-crop-cancel" id="avaCropCancel">取消</button>
+      </div>
+      <div class="ava-crop-view" id="avaCropView">
+        <img class="ava-crop-img" id="avaCropImg" alt="" draggable="false" />
+        <div class="ava-crop-grid"></div>
+      </div>
+      <div class="ava-crop-zoom">
+        <span class="ava-crop-zoom-ico">−</span>
+        <input type="range" id="avaCropZoom" min="1" max="4" step="0.01" value="1" />
+        <span class="ava-crop-zoom-ico">+</span>
+      </div>
+      <div class="ava-crop-actions">
+        <button class="ava-crop-btn ava-crop-done" id="avaCropDone">使用此头像</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <!-- 随记详情（查看 / 分享 / 重新编辑） -->
+  <div class="d-sheet" id="s1-detail" hidden>
+    <div class="d-mask" data-detail-close></div>
+    <div class="d-card">
+      <div class="d-head">
+        <span class="d-title">手记详情</span>
+        <button class="d-close" data-detail-close aria-label="关闭">✕</button>
+      </div>
+      <div class="d-body" id="s1-detail-body"></div>
+      <div class="d-actions">
+        <button class="d-btn" id="s1-detail-edit">重新编辑</button>
+        <button class="d-btn d-btn-primary" id="s1-detail-share">分享</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 周整理报告 · 板块 / 关键词详情 -->
+  <div class="d-sheet" id="s3-detail" hidden>
+    <div class="d-mask" data-s3d-close></div>
+    <div class="d-card">
+      <div class="d-head">
+        <span class="d-title" id="s3-detail-title">关键词</span>
+        <button class="d-close" data-s3d-close aria-label="关闭">✕</button>
+      </div>
+      <div class="d-body" id="s3-detail-body"></div>
+    </div>
+  </div>
+
+  <!-- 周整理报告 · 分类全部随记（可编辑、可拖动改分类） -->
+  <div class="d-sheet" id="s3-cat" hidden>
+    <div class="d-mask" data-s3c-close></div>
+    <div class="d-card d-card-tall">
+      <div class="d-head">
+        <span class="d-title" id="s3-cat-title">分类</span>
+        <button class="d-close" data-s3c-close aria-label="关闭">✕</button>
+      </div>
+      <div class="d-cat-hint">点击下方分类条可直接切换查看；长按一条手记后拖到分类条上即可移动分类</div>
+      <div class="d-body d-body-scroll" id="s3-cat-body"></div>
+      <div class="d-cat-targets" id="s3-cat-targets"></div>
+    </div>
+  </div>
+
+  <script src="storage.js"></script>
+  <script src="app.js"></script>
+  <script>
+    // 注册 Service Worker，使随遂可作为可安装、可离线的 PWA 在手机上使用
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('./sw.js').catch(function (e) {
+          console.warn('SW register failed:', e);
+        });
+      });
+    }
+  </script>
+</body>
+</html>
