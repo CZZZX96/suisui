@@ -299,7 +299,6 @@
               <div class="rec-head">
                 <span class="rec-title">拍摄视频 · 最长 60 秒</span>
                 <div class="rec-head-right">
-                  <button class="rec-orient" id="recOrient" type="button" aria-label="切换横竖屏">▯ 竖屏</button>
                   <button class="rec-close" id="recClose" aria-label="关闭">✕</button>
                 </div>
               </div>
@@ -335,7 +334,8 @@
                 <button type="button" class="crop-ratio" data-ratio="3:4">3:4</button>
                 <button type="button" class="crop-ratio" data-ratio="16:9">16:9</button>
               </div>
-              <div class="crop-viewport" id="cropViewport"><img id="cropImg" alt=""></div>
+              <div class="crop-viewport" id="cropViewport"><img id="cropImg" alt=""><div class="crop-box" id="cropBox" hidden><span class="crop-handle" data-h="nw"></span><span class="crop-handle" data-h="ne"></span><span class="crop-handle" data-h="sw"></span><span class="crop-handle" data-h="se"></span></div></div>
+              <div class="crop-info" id="cropInfo">拖动图片调整位置 · 拖动选框四角裁剪</div>
               <div class="crop-tools">
                 <input type="range" id="cropZoom" min="1" max="3" step="0.01" value="1" class="crop-range">
                 <div class="modal-actions">
