@@ -1656,34 +1656,6 @@ p { margin: 0; }
   justify-content: center;
   z-index: 42;
 }
-/* 横屏模式：把整个 sheet 旋转 90°，取景框真正变横屏 */
-body.rec-land .rec-sheet {
-  width: 100vh !important;
-  height: 100vw !important;
-  max-width: 100vh !important;
-  max-height: 100vw !important;
-  position: absolute !important;
-  top: 50% !important; left: 50% !important;
-  transform: translate(-50%, -50%) rotate(90deg) !important;
-  transform-origin: center center !important;
-  border-radius: 0 !important;
-  padding: 14px 22px calc(16px + 34px) !important;
-  background: #000 !important;
-  color: #fff !important;
-  /* 关键：覆盖 .rec-sheet 上的 sheetUp 动画，否则关键帧的 transform 会锁死我们的 rotate */
-  animation: none !important;
-}
-body.rec-land .rec-title { color: #fff; }
-body.rec-land .rec-close { color: #fff; }
-body.rec-land .rec-orient { background: rgba(255,255,255,0.18); color: #fff; }
-body.rec-land .rec-album { background: rgba(255,255,255,0.12); color: #fff; border-color: rgba(255,255,255,0.25); }
-body.rec-land .rec-retake { background: rgba(255,255,255,0.12); color: #fff; border-color: rgba(255,255,255,0.25); }
-/* 横屏后视频预览拉满宽度 */
-body.rec-land .rec-preview.land {
-  width: 100%;
-  height: auto;
-  aspect-ratio: 16 / 9;
-}
 /* 录制顶部提示：已有视频时显示 */
 .rec-hint {
   font-size: 12px;
@@ -1720,11 +1692,10 @@ body.rec-land .rec-preview.land {
   background: #000;
   border-radius: 12px;
   object-fit: contain;
-  max-width: 100%;
+  width: 100%;
+  max-height: 56vh;
+  aspect-ratio: auto;
 }
-/* 竖屏预览：9:16 居中；横屏预览：16:9 满宽。均 contain 不裁切 */
-.rec-preview:not(.land) { width: auto; height: 280px; aspect-ratio: 9 / 16; }
-.rec-preview.land { width: 100%; height: auto; aspect-ratio: 16 / 9; }
 .rec-timer {
   position: absolute;
   top: 10px; left: 10px;
@@ -1748,7 +1719,7 @@ body.rec-land .rec-preview.land {
   animation: recBlink 1.2s ease-in-out infinite;
 }
 @keyframes recBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-.rec-hint { font-size: 12px; color: var(--muted); text-align: center; margin-top: -2px; }
+.rec-hint { font-size: 12px; color: #D0504E; text-align: center; margin-top: -2px; }
 
 /* ===== 裁剪 / 画面选区 ===== */
 .crop-ratios {
@@ -1771,6 +1742,22 @@ body.rec-land .rec-preview.land {
   border-color: var(--green);
   color: #fff;
 }
+/* 照片裁剪：可拖动/缩放的选区框 */
+.crop-box {
+  position: absolute; border: 2px solid #fff;
+  box-shadow: 0 0 0 9999px rgba(0,0,0,0.5);
+  box-sizing: border-box; touch-action: none;
+}
+.crop-handle {
+  position: absolute; width: 22px; height: 22px;
+  background: #fff; border: 2px solid var(--green); border-radius: 50%;
+  transform: translate(-50%, -50%); touch-action: none;
+}
+.crop-handle[data-h="nw"] { left: 0; top: 0; }
+.crop-handle[data-h="ne"] { left: 100%; top: 0; }
+.crop-handle[data-h="sw"] { left: 0; top: 100%; }
+.crop-handle[data-h="se"] { left: 100%; top: 100%; }
+.crop-info { font-size: 12px; color: var(--muted); text-align: center; }
 
 /* 画面选区裁切：自由矩形拖动 */
 .fc-stage { position: relative; width: 100%; background: #000; border-radius: 12px; overflow: hidden; touch-action: none; }
@@ -1784,6 +1771,11 @@ body.rec-land .rec-preview.land {
   border-radius: 50%; pointer-events: auto; transform: translate(-50%, -50%);
 }
 .fc-aspect-info { font-size: 12px; color: var(--muted); text-align: center; margin-top: 6px; }
+/* 画面裁切：四个角的手柄必须显式定位，否则会叠在左上角 */
+.fc-handle[data-h="nw"] { left: 0; top: 0; }
+.fc-handle[data-h="ne"] { left: 100%; top: 0; }
+.fc-handle[data-h="sw"] { left: 0; top: 100%; }
+.fc-handle[data-h="se"] { left: 100%; top: 100%; }
 
 /* ===== 书写界面：缩略图操作按钮 ===== */
 .tray-tools {
@@ -1809,22 +1801,22 @@ body.rec-land .rec-preview.land {
 .modal-actions { display: flex; gap: 10px; }
 .btn-primary { flex: 1; padding: 12px 0; border-radius: 12px; font-weight: 600; font-size: 14px; background: var(--green); color: #fff; border: none; }
 .btn-ghost { flex: 1; padding: 12px 0; border-radius: 12px; font-weight: 600; font-size: 14px; background: var(--card); color: var(--text); border: 1px solid var(--divider); }
+/* 拍摄来源选择里的提醒 */
+.cap-warn { font-size: 12px; color: #D0504E; background: rgba(208,80,78,0.08); border-radius: 8px; padding: 8px 10px; margin-bottom: 4px; line-height: 1.4; }
 
 /* ===== 照片裁剪 ===== */
 .crop-viewport {
   position: relative;
   width: 100%;
-  /* 自由模式下由 JS 设置 aspect-ratio 或不设（保持图片原比例） */
+  height: 56vh;
+  max-height: 460px;
   background: #000;
   border-radius: 12px;
   overflow: hidden;
   touch-action: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   margin: 0 auto;
 }
-.crop-viewport img { transform-origin: center center; max-width: none; will-change: transform; }
+.crop-viewport img { position: absolute; left: 0; top: 0; transform-origin: 0 0; max-width: none; will-change: transform; touch-action: none; user-select: none; -webkit-user-drag: none; }
 .crop-range { width: 100%; }
 .crop-tools { display: flex; flex-direction: column; gap: 10px; }
 
