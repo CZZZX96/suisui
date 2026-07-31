@@ -38,18 +38,31 @@
     return (n || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
   function setText(sel, txt) { const el = $(sel); if (el) el.textContent = txt; }
-  // 通用确认弹层：返回 Promise<boolean>，点击「确认」resolve(true)
-  function showConfirm(title, msg, onOk) {
+  // 通用确认弹层：返回 Promise<boolean>，点击「确认」resolve(true)、「取消」resolve(false)
+  function showConfirm(title, msg, onOk, onCancel, okText, cancelText) {
     const mask = $('#confirmMask');
-    if (!mask) { if (window.confirm(title + '\n' + msg)) onOk && onOk(); return; }
+    if (!mask) {
+      const ok = window.confirm(title + '\n' + msg);
+      if (ok) { onOk && onOk(); } else { onCancel && onCancel(); }
+      return Promise.resolve(ok);
+    }
     setText('#confirmTitle', title);
     setText('#confirmMsg', msg);
     const ok = $('#confirmOk'), cancel = $('#confirmCancel');
-    const close = () => { mask.hidden = true; ok.onclick = null; cancel.onclick = null; mask.onclick = null; };
-    ok.onclick = () => { close(); if (onOk) onOk(); };
-    cancel.onclick = close;
-    mask.onclick = (e) => { if (e.target === mask) close(); };
-    mask.hidden = false;
+    ok.textContent = okText || '确认';
+    cancel.textContent = cancelText || '取消';
+    return new Promise((resolve) => {
+      const close = (res) => {
+        mask.hidden = true;
+        ok.onclick = null; cancel.onclick = null; mask.onclick = null;
+        if (res) { onOk && onOk(); } else { onCancel && onCancel(); }
+        resolve(res);
+      };
+      ok.onclick = () => close(true);
+      cancel.onclick = () => close(false);
+      mask.onclick = (e) => { if (e.target === mask) close(false); };
+      mask.hidden = false;
+    });
   }
   function monthLabel(k) { const p = (k || '').split('-'); return p.length === 2 ? `${p[0]} 年 ${parseInt(p[1], 10)} 月` : k; }
   // 周区间 -> 2026.7.13-2026.7.19 完整年形式
@@ -692,6 +705,12 @@
   // 当前手记是否已有视频（用于录制界面顶部提示）
   function noteHasVideo() { return s2.media.some((m) => m && m.kind === 'video'); }
 
+  // 视频单条限制：添加前先确认（已有视频则询问是否替换）
+  async function ensureVideoSlot() {
+    if (!noteHasVideo()) return true;
+    return await showConfirm('仅支持 1 段视频', '本篇手记已有一段视频，是否用新视频替换原有视频？', null, null, '替换', '取消');
+  }
+
   /* ============ T4 放大查看（lightbox） ============ */
   function openLightbox(m) {
     if (!m) return;
@@ -713,121 +732,193 @@
   $('#lbClose').addEventListener('click', () => { $('#lightbox').hidden = true; $('#lbStage').innerHTML = ''; });
   $('#lightbox').addEventListener('click', (e) => { if (e.target.id === 'lightbox') { $('#lightbox').hidden = true; $('#lbStage').innerHTML = ''; } });
 
-  /* ============ T5 照片裁剪（手记内） ============ */
-  let noteCropState = { scale: 1, tx: 0, ty: 0 }, cropBaseScale = 1, cropImgEl = null, cropTargetIndex = -1;
-  let cropRatio = 'free'; // 当前比例：free / 1:1 / 4:3 / 3:4 / 16:9
-  let cropRatioPending = null; // 图片未加载时点击比例按钮，延迟应用
+  /* ============ T5 照片裁剪（手记内）============
+     交互模型：图片以 cover 方式铺满取景框（保证任意选区都能取到像素），
+     再用一个可拖动/缩放的选框决定裁剪区域。比例按钮锁定选框宽高比（free 为任意）。
+     这样「自由选区」「横图裁竖图」「竖图裁剪」都能正常工作。 */
   const cropVP = $('#cropViewport');
+  const cropImg = $('#cropImg');
+  const cropBox = $('#cropBox');
   const cropRatiosEl = $('#cropRatios');
-  function applyRatioToVP(r) {
-    if (!cropVP) return;
-    if (r === 'free') {
-      if (cropImgEl && cropImgEl.complete && cropImgEl.naturalWidth) {
-        cropVP.style.aspectRatio = `${cropImgEl.naturalWidth} / ${cropImgEl.naturalHeight}`;
-      } else {
-        cropVP.style.aspectRatio = 'auto';
-      }
-    } else {
-      const [w, h] = r.split(':').map(Number);
-      cropVP.style.aspectRatio = `${w} / ${h}`;
-    }
+  const cropInfoEl = $('#cropInfo');
+  let cropTargetIndex = -1;
+  let cropImgW = 0, cropImgH = 0;
+  let cropScale = 1;   // 图片当前显示缩放（= cover 基础缩放 × 滑块 zoom）
+  let cropTx = 0, cropTy = 0;
+  let cropZoom = 1;    // 1 = 恰好覆盖；越大越放大
+  let cropBoxRect = { x: 0, y: 0, w: 0, h: 0 };
+  let cropRatioSel = 'free';
+
+  function cropVPSize() {
+    const r = cropVP.getBoundingClientRect();
+    let w = r.width, h = r.height;
+    if (!w) w = cropVP.clientWidth || 320;
+    if (!h) h = cropVP.clientHeight || 440;
+    return { w, h };
+  }
+  function applyCropImage() {
+    cropImg.style.transform = `translate(${cropTx}px, ${cropTy}px) scale(${cropScale})`;
+  }
+  function applyCropBox() {
+    cropBox.hidden = false;
+    cropBox.style.left = cropBoxRect.x + 'px';
+    cropBox.style.top = cropBoxRect.y + 'px';
+    cropBox.style.width = cropBoxRect.w + 'px';
+    cropBox.style.height = cropBoxRect.h + 'px';
+  }
+  function clampImgPan() {
+    const { w: VW, h: VH } = cropVPSize();
+    const dispW = cropImgW * cropScale, dispH = cropImgH * cropScale;
+    cropTx = Math.min(0, Math.max(VW - dispW, cropTx));
+    cropTy = Math.min(0, Math.max(VH - dispH, cropTy));
+  }
+  function initCrop() {
+    const { w: VW, h: VH } = cropVPSize();
+    cropImgW = cropImg.naturalWidth; cropImgH = cropImg.naturalHeight;
+    const cover = Math.max(VW / cropImgW, VH / cropImgH) || 1;
+    cropZoom = 1;
+    cropScale = cover;
+    cropTx = (VW - cropImgW * cropScale) / 2;
+    cropTy = (VH - cropImgH * cropScale) / 2;
+    applyCropImage();
+    cropBoxRect = { x: 0, y: 0, w: VW, h: VH };
+    applyCropBox();
+    setCropRatio('free');
   }
   function setCropRatio(r) {
-    cropRatio = r;
-    if (cropRatiosEl) {
-      cropRatiosEl.querySelectorAll('.crop-ratio').forEach((b) => {
-        b.classList.toggle('is-active', b.dataset.ratio === r);
-      });
+    cropRatioSel = r;
+    if (cropRatiosEl) cropRatiosEl.querySelectorAll('.crop-ratio').forEach((b) => b.classList.toggle('is-active', b.dataset.ratio === r));
+    const { w: VW, h: VH } = cropVPSize();
+    if (r === 'free') {
+      if (cropInfoEl) cropInfoEl.textContent = '自由模式：拖动四角任意裁剪';
+      return; // 保持当前选区形状
     }
-    if (!cropImgEl || !cropImgEl.complete || !cropImgEl.naturalWidth) {
-      cropRatioPending = r; // 图片未就绪，延后应用
-      return;
-    }
-    applyRatioToVP(r);
-    fitCropImage();
-  }
-  function fitCropImage() {
-    if (!cropImgEl || !cropImgEl.naturalWidth) return;
-    const vp = cropVP.getBoundingClientRect();
-    if (!vp.width || !vp.height) return;
-    const iw = cropImgEl.naturalWidth, ih = cropImgEl.naturalHeight;
-    cropBaseScale = Math.min(vp.width / iw, vp.height / ih) || 1;
-    cropImgEl.style.width = Math.round(iw * cropBaseScale) + 'px';
-    cropImgEl.style.height = Math.round(ih * cropBaseScale) + 'px';
-    applyCropTransform();
+    const [rw, rh] = r.split(':').map(Number);
+    let w = VW, h = w * rh / rw;
+    if (h > VH) { h = VH; w = h * rw / rh; }
+    cropBoxRect = { x: (VW - w) / 2, y: (VH - h) / 2, w, h };
+    applyCropBox();
+    if (cropInfoEl) cropInfoEl.textContent = `已锁定 ${r} 比例`;
   }
   function openNoteCrop(m) {
     if (!m || m.kind !== 'image') return;
     cropTargetIndex = s2.media.indexOf(m);
-    cropRatioPending = null;
-    const start = (url) => {
-      noteCropState = { scale: 1, tx: 0, ty: 0 };
-      cropImgEl = $('#cropImg');
-      cropImgEl.onload = () => {
-        // 若有挂起的比例选择，先应用；否则默认「自由」= 图片原比例
-        if (cropRatioPending) {
-          applyRatioToVP(cropRatioPending);
-          cropRatio = cropRatioPending;
-          cropRatioPending = null;
-        } else {
-          setCropRatio('free');
-          return;
-        }
-        fitCropImage();
-      };
-      cropImgEl.src = url;
+    const url = s2Preview(m);
+    const start = (u) => {
+      cropImg.onload = () => { initCrop(); };
+      cropImg.src = u;
       $('#cropZoom').value = 1;
       $('#cropModal').hidden = false;
     };
-    const url = s2Preview(m);
     if (url) start(url);
     else if (m.mediaId) SuiDB.mediaURL(m.mediaId).then((u) => { if (u) start(u); });
   }
-  function applyCropTransform() {
-    if (!cropImgEl) return;
-    cropImgEl.style.transform = `translate(${noteCropState.tx}px, ${noteCropState.ty}px) scale(${noteCropState.scale})`;
-  }
   function closeNoteCrop() {
     $('#cropModal').hidden = true;
-    if (cropImgEl) cropImgEl.removeAttribute('src');
-    if (cropVP) cropVP.style.aspectRatio = '';
-    cropTargetIndex = -1;
-    cropRatio = 'free';
-    if (cropRatiosEl) cropRatiosEl.querySelectorAll('.crop-ratio').forEach((b) => b.classList.toggle('is-active', b.dataset.ratio === 'free'));
+    if (cropImg) cropImg.removeAttribute('src');
+    if (cropBox) cropBox.hidden = true;
+    cropTargetIndex = -1; cropRatioSel = 'free';
   }
-  let noteCropDrag = false, cropLX = 0, cropLY = 0;
-  cropVP.addEventListener('pointerdown', (e) => { noteCropDrag = true; cropLX = e.clientX; cropLY = e.clientY; try { cropVP.setPointerCapture(e.pointerId); } catch (x) {} });
-  cropVP.addEventListener('pointermove', (e) => {
-    if (!noteCropDrag) return;
-    noteCropState.tx += e.clientX - cropLX; noteCropState.ty += e.clientY - cropLY;
-    cropLX = e.clientX; cropLY = e.clientY; applyCropTransform();
+  // 拖动图片（在选框之外的区域）
+  let cropPanOn = false, panSX = 0, panSY = 0, panTX = 0, panTY = 0;
+  cropImg.addEventListener('pointerdown', (e) => {
+    cropPanOn = true; panSX = e.clientX; panSY = e.clientY; panTX = cropTx; panTY = cropTy;
+    try { cropImg.setPointerCapture(e.pointerId); } catch (x) {}
+    e.preventDefault();
   });
-  cropVP.addEventListener('pointerup', () => { noteCropDrag = false; });
-  cropVP.addEventListener('pointercancel', () => { noteCropDrag = false; });
-  $('#cropZoom').addEventListener('input', (e) => { noteCropState.scale = parseFloat(e.target.value) || 1; applyCropTransform(); });
-  $('#cropCancel').addEventListener('click', closeNoteCrop);
-  $('#cropReset').addEventListener('click', () => { noteCropState = { scale: 1, tx: 0, ty: 0 }; $('#cropZoom').value = 1; applyCropTransform(); });
-  // 比例按钮点击
+  cropImg.addEventListener('pointermove', (e) => {
+    if (!cropPanOn) return;
+    cropTx = panTX + (e.clientX - panSX);
+    cropTy = panTY + (e.clientY - panSY);
+    clampImgPan(); applyCropImage();
+  });
+  cropImg.addEventListener('pointerup', () => { cropPanOn = false; });
+  cropImg.addEventListener('pointercancel', () => { cropPanOn = false; });
+  // 缩放滑块（以视口中心为锚点缩放，避免图片跑偏）
+  $('#cropZoom').addEventListener('input', (e) => {
+    const { w: VW, h: VH } = cropVPSize();
+    const cover = Math.max(VW / cropImgW, VH / cropImgH) || 1;
+    cropZoom = parseFloat(e.target.value) || 1;
+    const oldScale = cropScale;
+    cropScale = cover * cropZoom;
+    if (oldScale > 0) {
+      const cx = VW / 2, cy = VH / 2;
+      cropTx = cx - (cx - cropTx) * (cropScale / oldScale);
+      cropTy = cy - (cy - cropTy) * (cropScale / oldScale);
+    }
+    clampImgPan(); applyCropImage();
+  });
+  // 比例按钮
   if (cropRatiosEl) {
     cropRatiosEl.addEventListener('click', (e) => {
-      const btn = e.target.closest('.crop-ratio');
-      if (!btn) return;
+      const btn = e.target.closest('.crop-ratio'); if (!btn) return;
       setCropRatio(btn.dataset.ratio || 'free');
     });
   }
+  $('#cropCancel').addEventListener('click', closeNoteCrop);
+  $('#cropReset').addEventListener('click', () => { initCrop(); $('#cropZoom').value = 1; });
+  // 选框拖动 / 缩放
+  let boxDrag = null, boxStart = null, boxPt = null;
+  function boxDown(mode, e) {
+    boxDrag = mode;
+    boxStart = { ...cropBoxRect };
+    boxPt = { x: e.clientX, y: e.clientY };
+    e.preventDefault(); e.stopPropagation();
+  }
+  cropBox.addEventListener('pointerdown', (e) => {
+    if (e.target.classList.contains('crop-handle')) return; // 手柄单独处理
+    boxDown('move', e);
+  });
+  if (cropBox) cropBox.querySelectorAll('.crop-handle').forEach((h) => {
+    h.addEventListener('pointerdown', (e) => boxDown(h.dataset.h, e));
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!boxDrag) return;
+    const { w: VW, h: VH } = cropVPSize();
+    const dx = e.clientX - boxPt.x, dy = e.clientY - boxPt.y;
+    let { x, y, w, h } = boxStart;
+    const MIN = 30;
+    if (boxDrag === 'move') { x += dx; y += dy; }
+    else if (boxDrag === 'nw') { x += dx; y += dy; w -= dx; h -= dy; }
+    else if (boxDrag === 'ne') { w += dx; y += dy; h -= dy; }
+    else if (boxDrag === 'sw') { x += dx; w -= dx; h += dy; }
+    else if (boxDrag === 'se') { w += dx; h += dy; }
+    if (cropRatioSel !== 'free') {
+      const [rw, rh] = cropRatioSel.split(':').map(Number);
+      h = w * rh / rw;
+      if (boxDrag === 'nw') { y = boxStart.y + (boxStart.h - h); }
+      else if (boxDrag === 'ne') { y = boxStart.y + (boxStart.h - h); }
+      else if (boxDrag === 'sw') { x = boxStart.x + (boxStart.w - w); }
+    }
+    w = Math.max(MIN, w); h = Math.max(MIN, h);
+    if (boxDrag === 'move') {
+      x = Math.max(0, Math.min(x, VW - w));
+      y = Math.max(0, Math.min(y, VH - h));
+    } else {
+      x = Math.max(0, Math.min(x, VW - MIN));
+      y = Math.max(0, Math.min(y, VH - MIN));
+      w = Math.min(w, VW - x);
+      h = Math.min(h, VH - y);
+    }
+    cropBoxRect = { x, y, w, h };
+    applyCropBox();
+  });
+  window.addEventListener('pointerup', () => { boxDrag = null; });
   $('#cropConfirm').addEventListener('click', () => {
-    if (!cropImgEl || !cropImgEl.complete || !cropImgEl.naturalWidth) { toast('图片未就绪'); return; }
-    const vp = cropVP.getBoundingClientRect();
-    const iw = cropImgEl.naturalWidth, ih = cropImgEl.naturalHeight;
-    const dispW = iw * cropBaseScale * noteCropState.scale, dispH = ih * cropBaseScale * noteCropState.scale;
-    const imgLeft = (vp.width - dispW) / 2 + noteCropState.tx, imgTop = (vp.height - dispH) / 2 + noteCropState.ty;
-    const k = cropBaseScale * noteCropState.scale;
-    const sx0 = (0 - imgLeft) / k, sy0 = (0 - imgTop) / k;
-    const sx1 = (vp.width - imgLeft) / k, sy1 = (vp.height - imgTop) / k;
-    const cw = Math.max(1, Math.round(sx1 - sx0)), ch = Math.max(1, Math.round(sy1 - sy0));
-    const canvas = document.createElement('canvas'); canvas.width = cw; canvas.height = ch;
+    if (!cropImgW || !cropImgH) { toast('图片未就绪'); return; }
+    const sx = (cropBoxRect.x - cropTx) / cropScale;
+    const sy = (cropBoxRect.y - cropTy) / cropScale;
+    const sw = cropBoxRect.w / cropScale;
+    const sh = cropBoxRect.h / cropScale;
+    const cx = Math.max(0, Math.min(sx, cropImgW));
+    const cy = Math.max(0, Math.min(sy, cropImgH));
+    const cw = Math.max(1, Math.min(sx + sw, cropImgW) - cx);
+    const ch = Math.max(1, Math.min(sy + sh, cropImgH) - cy);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(cw); canvas.height = Math.round(ch);
     const ctx = canvas.getContext('2d');
-    ctx.drawImage(cropImgEl, sx0, sy0, cw, ch, 0, 0, cw, ch);
+    try { ctx.drawImage(cropImg, cx, cy, cw, ch, 0, 0, canvas.width, canvas.height); }
+    catch (err) { toast('裁剪失败'); return; }
     canvas.toBlob((blob) => {
       if (!blob) { toast('裁剪失败'); return; }
       const url = URL.createObjectURL(blob);
@@ -865,6 +956,18 @@
     if (url) start(url);
     else if (m.mediaId) SuiDB.mediaURL(m.mediaId).then((u) => { if (u) start(u); });
   }
+  function pickRecMime() {
+    const cands = [
+      'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm'
+    ];
+    for (const m of cands) { try { if (MediaRecorder.isTypeSupported(m)) return m; } catch (e) {} }
+    return '';
+  }
+
   function clipBounds() {
     const d = clipVideo.duration || 0;
     const s = (+$('#clipStart').value) / 1000 * d;
@@ -892,71 +995,56 @@
     const vw = clipVideo.videoWidth, vh = clipVideo.videoHeight;
     const sw = stage.clientWidth || 320;
     const sh = Math.round(sw * vh / vw);
-    cv.width = sw; cv.height = sh;
+    cv.width = sw; cv.height = sh; cv.style.height = sh + 'px';
     const ctx = cv.getContext('2d');
     try { ctx.drawImage(clipVideo, 0, 0, sw, sh); } catch (e) {}
-    // 默认框：居中 80% 大小
+    // 默认框：居中 84% 大小
     const box = $('#fcBox');
-    box.style.left = (sw * 0.1) + 'px';
-    box.style.top = (sh * 0.1) + 'px';
-    box.style.width = (sw * 0.8) + 'px';
-    box.style.height = (sh * 0.8) + 'px';
-    box.style.height = (sh * 0.8) + 'px';
+    box.style.left = (sw * 0.08) + 'px';
+    box.style.top = (sh * 0.08) + 'px';
+    box.style.width = (sw * 0.84) + 'px';
+    box.style.height = (sh * 0.84) + 'px';
     $('#frameCropModal').dataset.sw = sw;
     $('#frameCropModal').dataset.sh = sh;
     $('#frameCropModal').dataset.vw = vw;
     $('#frameCropModal').dataset.vh = vh;
     $('#frameCropModal').hidden = false;
-    setupFrameCropDrag();
+    if (!window.__fcDragReady) { setupFrameCropDrag(); window.__fcDragReady = true; }
   }
   function setupFrameCropDrag() {
     const box = $('#fcBox');
     const stage = $('#fcStage');
-    let activeH = null, startBox = null, startPt = null;
-    function downH(h, e) {
-      activeH = h;
+    let active = null, start = null, pt = null, sr = null;
+    function down(mode, e) {
+      active = mode;
+      sr = stage.getBoundingClientRect();
       const r = box.getBoundingClientRect();
-      const sr = stage.getBoundingClientRect();
-      startBox = { x: r.left - sr.left, y: r.top - sr.top, w: r.width, h: r.height };
-      startPt = { x: e.clientX, y: e.clientY };
+      start = { x: r.left - sr.left, y: r.top - sr.top, w: r.width, h: r.height };
+      pt = { x: e.clientX, y: e.clientY };
       e.preventDefault();
     }
-    box.querySelectorAll('.fc-handle').forEach((h) => {
-      h.onpointerdown = (e) => downH(h.dataset.h, e);
+    box.addEventListener('pointerdown', (e) => {
+      const h = e.target.classList.contains('fc-handle') ? e.target.dataset.h : 'move';
+      down(h, e);
     });
-    box.onpointerdown = (e) => {
-      if (e.target.classList.contains('fc-handle')) return;
-      activeH = 'move';
-      const r = box.getBoundingClientRect();
-      const sr = stage.getBoundingClientRect();
-      startBox = { x: r.left - sr.left, y: r.top - sr.top, w: r.width, h: r.height };
-      startPt = { x: e.clientX, y: e.clientY };
-      e.preventDefault();
-    };
-    function move(e) {
-      if (!activeH || !startBox) return;
-      const sr = stage.getBoundingClientRect();
-      const dx = e.clientX - startPt.x, dy = e.clientY - startPt.y;
-      let { x, y, w, h } = startBox;
-      const minW = 40, minH = 40;
-      if (activeH === 'move') { x += dx; y += dy; }
-      else if (activeH === 'nw') { x += dx; y += dy; w -= dx; h -= dy; if (w < minW) { x -= (minW - w); w = minW; } if (h < minH) { y -= (minH - h); h = minH; } }
-      else if (activeH === 'ne') { w += dx; y += dy; h -= dy; if (w < minW) w = minW; if (h < minH) { y -= (minH - h); h = minH; } }
-      else if (activeH === 'sw') { x += dx; w -= dx; h += dy; if (w < minW) { x -= (minW - w); w = minW; } if (h < minH) h = minH; }
-      else if (activeH === 'se') { w += dx; h += dy; if (w < minW) w = minW; if (h < minH) h = minH; }
-      // 限制在 stage 内
-      x = Math.max(0, Math.min(x, sr.width - minW));
-      y = Math.max(0, Math.min(y, sr.height - minH));
+    window.addEventListener('pointermove', (e) => {
+      if (!active || !start) return;
+      const dx = e.clientX - pt.x, dy = e.clientY - pt.y;
+      let { x, y, w, h } = start;
+      const min = 40;
+      if (active === 'move') { x += dx; y += dy; }
+      else if (active === 'nw') { x += dx; y += dy; w -= dx; h -= dy; if (w < min) { x -= (min - w); w = min; } if (h < min) { y -= (min - h); h = min; } }
+      else if (active === 'ne') { w += dx; y += dy; h -= dy; if (w < min) w = min; if (h < min) { y -= (min - h); h = min; } }
+      else if (active === 'sw') { x += dx; w -= dx; h += dy; if (w < min) { x -= (min - w); w = min; } if (h < min) h = min; }
+      else if (active === 'se') { w += dx; h += dy; if (w < min) w = min; if (h < min) h = min; }
+      x = Math.max(0, Math.min(x, sr.width - min));
+      y = Math.max(0, Math.min(y, sr.height - min));
       w = Math.min(w, sr.width - x);
       h = Math.min(h, sr.height - y);
-      box.style.left = x + 'px';
-      box.style.top = y + 'px';
-      box.style.width = w + 'px';
-      box.style.height = h + 'px';
-    }
-    function up() { activeH = null; startBox = null; startPt = null; }
-    document.addEventListener('pointermove', move);
-    document.addEventListener('pointerup', () => { up(); document.removeEventListener('pointermove', move); }, { once: true });
+      box.style.left = x + 'px'; box.style.top = y + 'px';
+      box.style.width = w + 'px'; box.style.height = h + 'px';
+    });
+    window.addEventListener('pointerup', () => { active = null; start = null; });
   }
   $('#frameCropCancel').addEventListener('click', () => { $('#frameCropModal').hidden = true; });
   $('#frameCropReset').addEventListener('click', () => {
@@ -1002,6 +1090,10 @@
       dy0 = Math.round(vh * clipFrameCrop.sy);
       dw = cw; dh = ch;
     }
+    // 限制输出分辨率，避免长时间高清视频剪辑过慢、产物过大
+    const MAX_SIDE = 1280;
+    const sc = Math.min(1, MAX_SIDE / Math.max(cw, ch));
+    if (sc < 1) { cw = Math.round(cw * sc); ch = Math.round(ch * sc); }
     const canvas = document.createElement('canvas');
     canvas.width = cw; canvas.height = ch;
     const ctx = canvas.getContext('2d');
@@ -1027,6 +1119,8 @@
       function tick() {
         if (sv.currentTime >= e || sv.ended) { try { sv.pause(); } catch (x) {} try { rec.stop(); } catch (x) {} resolve(); return; }
         try { ctx.drawImage(sv, dx0, dy0, dw, dh, 0, 0, cw, ch); } catch (x) {}
+        const prog = Math.max(0, Math.min(100, Math.round((sv.currentTime - s) / (e - s) * 100)));
+        const info = $('#clipInfo'); if (info) info.textContent = '剪辑中… ' + prog + '%';
         requestAnimationFrame(tick);
       }
       requestAnimationFrame(tick);
@@ -1092,11 +1186,16 @@
           { t: '从相册选择照片', file: 'capPhotoAlbum' }
         ];
     capTitle.textContent = kind === 'video' ? '添加视频' : '添加照片';
-    capOpts.innerHTML = opts.map((o) =>
+    let html = opts.map((o) =>
       o.file
         ? `<button type="button" class="cap-opt" data-file="${o.file}">${o.t}</button>`
         : `<button type="button" class="cap-opt" data-cap="${o.cap}">${o.t}</button>`
     ).join('');
+    // 视频单条限制：进入选择页就先提醒用户
+    if (kind === 'video' && noteHasVideo()) {
+      html = `<div class="cap-warn">本篇手记已有 1 段视频，再添加将替换原视频。</div>` + html;
+    }
+    capOpts.innerHTML = html;
     captureSheet.hidden = false;
   }
   function closeCaptureSheet() { if (captureSheet) captureSheet.hidden = true; }
@@ -1109,8 +1208,9 @@
       closeCaptureSheet();
       // 文件类选项：在真实用户手势中调用 input.click()，比 <label for> 在 Android 上更稳定可靠
       if (fileId) { const el = document.getElementById(fileId); if (el) el.click(); return; }
-      if (cap === 'video-back') { recFacing = 'environment'; openRec(); }
-      else if (cap === 'video-front') { recFacing = 'user'; openRec(); }
+      // 视频拍摄：直接调用系统相机（capture），横竖屏朝向由系统保证，避免自研录制朝向搞反
+      if (cap === 'video-back') { const el = document.getElementById('capVideoBack'); if (el) el.click(); return; }
+      if (cap === 'video-front') { const el = document.getElementById('capVideoFront'); if (el) el.click(); return; }
     });
   }
 
@@ -1119,42 +1219,7 @@
   const recShoot = $('#recShoot'), recUse = $('#recUse'), recRetake = $('#recRetake');
   const recStopBtn = $('#recStop');
   const recAlbum = $('#recAlbum'), recClose = $('#recClose');
-  let recFacing = 'environment';
-  let recOrient = 'portrait';
-  const recOrientBtn = $('#recOrient');
-  let recStream = null, mediaRec = null, recChunks = [], recTimerInt = null, recStartTs = 0, recBlob = null, recUrl = null, recDur = 0;
-  // 横屏/竖屏：取流约束按方向设比例；预览容器也按方向切换比例，均不裁切
-  function recVideoConstraints() {
-    const portrait = recOrient !== 'landscape';
-    return {
-      video: {
-        facingMode: recFacing,
-        width: portrait ? { ideal: 720 } : { ideal: 1280 },
-        height: portrait ? { ideal: 1280 } : { ideal: 720 }
-      },
-      audio: { echoCancellation: true, noiseSuppression: true }
-    };
-  }
-  function applyRecOrient() {
-    if (!recPreview) return;
-    const isLand = recOrient === 'landscape';
-    recPreview.classList.toggle('land', isLand);
-    if (recOrientBtn) recOrientBtn.textContent = isLand ? '▭ 横屏' : '▯ 竖屏';
-    // 关键：旋转整个录制 sheet（CSS rotate 90°），让取景框真正变成横屏
-    document.body.classList.toggle('rec-land', isLand);
-    // 已有流则重启以应用新的视频尺寸约束
-    if (recStream && recPreview.srcObject === recStream) {
-      try { recPreview.srcObject = null; } catch (e) {}
-      recStream.getTracks().forEach((t) => { try { t.stop(); } catch (e) {} });
-      recStream = null;
-      navigator.mediaDevices.getUserMedia(recVideoConstraints()).then((s) => {
-        recStream = s;
-        resetPreviewForLive();
-        recPreview.srcObject = s;
-        try { recPreview.play(); } catch (e) {}
-      }).catch(() => {});
-    }
-  }
+  let recReviewFile = null, recReviewInput = null, recUrl = null;
   const REC_MAX = 60;
   const REC_MIN_MS = 700; // 低于此时长的点击视为误触，不生成空视频
 
@@ -1164,177 +1229,78 @@
   }
   const REC_MAX_LABEL = fmtSec(REC_MAX);
 
-  // 预览元素统一复位：录制取景时必须静音，否则会「边拍边外放正在拍的声音」（回声/啸叫）
-  function resetPreviewForLive() {
-    recPreview.removeAttribute('controls');
-    recPreview.loop = false;
-    recPreview.muted = true;
-    recPreview.defaultMuted = true;
-    recPreview.volume = 0;
-    recPreview.setAttribute('muted', '');
-    recPreview.playsInline = true;
-  }
+  // 视频采用「系统相机拍摄/相册选择 → App 内预览-重拍-使用」流程
   function setRecUI(mode) {
-    // mode: 'idle' | 'recording' | 'review'
-    recShoot.hidden = mode !== 'idle';
-    recShoot.disabled = mode !== 'idle';
-    recAlbum.hidden = mode === 'recording';
-    if (recStopBtn) { recStopBtn.hidden = mode !== 'recording'; recStopBtn.disabled = mode !== 'recording'; }
+    // mode: 'review' | 其它（隐藏回看控件）
+    recShoot.hidden = true; recShoot.disabled = true;
+    if (recStopBtn) { recStopBtn.hidden = true; recStopBtn.disabled = true; }
+    recAlbum.hidden = true;
     recUse.hidden = mode !== 'review';
     recRetake.hidden = mode !== 'review';
-    recTimerEl.classList.toggle('recording', mode === 'recording');
+    if (recTimerEl) recTimerEl.hidden = true;
   }
-
-  function openRec() {
-    recModal.hidden = false;
-    resetPreviewForLive();
-    setRecUI('idle');
-    applyRecOrient();
-    recTimerEl.textContent = '0:00 / ' + REC_MAX_LABEL;
-    // 顶部提示：本条手记是否已有视频
+  function showRecReview(file, fromInputId) {
+    if (!file) return;
+    recReviewFile = file; recReviewInput = fromInputId;
+    if (recUrl) { URL.revokeObjectURL(recUrl); }
+    recUrl = URL.createObjectURL(file);
+    recPreview.removeAttribute('controls'); recPreview.srcObject = null;
+    recPreview.controls = true;
+    recPreview.muted = false; recPreview.removeAttribute('muted'); recPreview.volume = 1;
+    recPreview.src = recUrl; recPreview.playsInline = true;
+    try { recPreview.play(); } catch (e) {}
     const hint = $('#recHint');
-    if (hint) hint.hidden = !noteHasVideo();
+    if (hint) {
+      hint.hidden = false;
+      hint.textContent = noteHasVideo()
+        ? '本篇手记已有一段视频，使用后将以新视频替换原有视频。'
+        : '本篇手记最多可包含 1 段视频。';
+    }
+    setRecUI('review');
+    recModal.hidden = false;
   }
   function closeRec() {
     recModal.hidden = true;
-    if (mediaRec && mediaRec.state !== 'inactive') { try { mediaRec.onstop = null; mediaRec.stop(); } catch (e) {} }
-    clearTimeout(recTimerInt);
-    stopStream();
     if (recUrl) { URL.revokeObjectURL(recUrl); recUrl = null; }
-    recBlob = null; recChunks = []; recPreview.removeAttribute('src'); recPreview.srcObject = null;
-    resetPreviewForLive();
-    setRecUI('idle');
-  }
-  function stopStream() { if (recStream) { recStream.getTracks().forEach((t) => t.stop()); recStream = null; } }
-  function tickRec() {
-    const el = (Date.now() - recStartTs) / 1000;
-    recTimerEl.textContent = fmtSec(Math.min(el, REC_MAX)) + ' / ' + REC_MAX_LABEL;
-    if (el >= REC_MAX) { stopRec(); return; }
-    recTimerInt = setTimeout(tickRec, 200);
-  }
-  function stopRec() {
-    clearTimeout(recTimerInt);
-    recDur = Math.max(1, Math.round((Date.now() - recStartTs) / 1000));
-    if (recStopBtn) recStopBtn.disabled = true;
-    recTimerEl.classList.remove('recording');
-    if (mediaRec && mediaRec.state !== 'inactive') { try { mediaRec.stop(); } catch (e) {} }
-    else { stopStream(); }
-  }
-  function onRecStop() {
-    stopStream();
-    const type = (mediaRec && mediaRec.mimeType) || (recChunks[0] && recChunks[0].type) || 'video/mp4';
-    recBlob = new Blob(recChunks, { type });
-    if (!recBlob.size) {
-      toast('没有录到画面，请再试一次');
-      recBlob = null; recChunks = [];
-      recPreview.srcObject = null; recPreview.removeAttribute('src');
-      resetPreviewForLive(); setRecUI('idle');
-      recTimerEl.textContent = '0:00 / ' + REC_MAX_LABEL;
-      return;
-    }
-    recUrl = URL.createObjectURL(recBlob);
-    // 回看阶段才解除静音（此时是播放已录好的片段，不会造成实时回声）
-    recPreview.srcObject = null;
-    recPreview.src = recUrl;
-    recPreview.controls = true;
-    recPreview.muted = false;
-    recPreview.removeAttribute('muted');
-    recPreview.volume = 1;
-    try { recPreview.play(); } catch (e) {}
-    const probe = document.createElement('video'); probe.src = recUrl;
-    probe.onloadedmetadata = () => {
-      const d = probe.duration;
-      if (isFinite(d) && d > 0) recDur = Math.min(REC_MAX, Math.max(1, Math.round(d)));
-    };
-    recTimerEl.textContent = '已录制 ' + fmtSec(recDur);
-    setRecUI('review');
-  }
-  function openRecAlbum() { const el = $('#capVideoAlbum'); if (el) el.click(); }
-
-  function pickRecMime() {
-    const cands = [
-      'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
-      'video/mp4',
-      'video/webm;codecs=vp9,opus',
-      'video/webm;codecs=vp8,opus',
-      'video/webm'
-    ];
-    for (const m of cands) { try { if (MediaRecorder.isTypeSupported(m)) return m; } catch (e) {} }
-    return '';
+    recPreview.pause(); recPreview.removeAttribute('src'); recReviewFile = null; recReviewInput = null;
+    setRecUI('closed');
   }
 
-  if (recShoot) recShoot.addEventListener('click', async () => {
-    recShoot.disabled = true;
-    try {
-      recStream = await navigator.mediaDevices.getUserMedia(recVideoConstraints());
-    } catch (err) {
-      recShoot.disabled = false;
-      toast('无法访问相机，已为你打开相册选择'); openRecAlbum(); return;
-    }
-    // 关键：取景阶段强制静音，避免边拍边外放（回声/自我监听）
-    resetPreviewForLive();
-    recPreview.srcObject = recStream;
-    try { await recPreview.play(); } catch (e) {}
-    recChunks = [];
-    const mime = pickRecMime();
-    try {
-      mediaRec = mime ? new MediaRecorder(recStream, { mimeType: mime }) : new MediaRecorder(recStream);
-    } catch (e) {
-      mediaRec = new MediaRecorder(recStream);
-    }
-    mediaRec.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
-    mediaRec.onstop = onRecStop;
-    mediaRec.start(200); // 分片输出，随时停止都能拿到完整数据
-    recStartTs = Date.now();
-    recDur = 0;
-    setRecUI('recording');
-    tickRec();
+  if (recClose) recClose.addEventListener('click', closeRec);
+  if (recRetake) recRetake.addEventListener('click', () => {
+    const id = recReviewInput;
+    recModal.hidden = true;
+    if (recUrl) { URL.revokeObjectURL(recUrl); recUrl = null; }
+    recPreview.pause(); recPreview.removeAttribute('src'); recReviewFile = null;
+    if (id) { const el = document.getElementById(id); if (el) el.click(); }
   });
-  if (recStopBtn) recStopBtn.addEventListener('click', () => {
-    const elapsed = Date.now() - recStartTs;
-    if (elapsed < REC_MIN_MS) { toast('再拍一会儿吧'); return; }
-    stopRec();
-  });
-  if (recUse) recUse.addEventListener('click', () => {
-    if (!recBlob) return;
-    const dur = Math.min(REC_MAX, Math.max(1, recDur || 1));
-    SuiDB.storeMedia(recBlob).then((d) => {
-      d.kind = 'video'; d._url = recUrl; d.dur = fmtSec(dur);
+  if (recUse) recUse.addEventListener('click', async () => {
+    const file = recReviewFile;
+    if (!file) return;
+    const ok = await ensureVideoSlot();
+    if (!ok) return; // 用户取消替换
+    const url = URL.createObjectURL(file);
+    SuiDB.storeMedia(file).then((d) => {
+      d.kind = 'video'; d._url = url; d.dur = '';
       addComposeMedia(d); toast('视频已加入记录');
     });
-    // 该 url 已交给 compose 预览使用，这里不 revoke
     recModal.hidden = true;
-    if (mediaRec && mediaRec.state !== 'inactive') { try { mediaRec.onstop = null; mediaRec.stop(); } catch (e) {} }
-    clearTimeout(recTimerInt); stopStream();
-    recUrl = null; recBlob = null; recChunks = [];
-    recPreview.removeAttribute('src'); recPreview.srcObject = null;
-    resetPreviewForLive(); setRecUI('idle');
-  });
-  if (recRetake) recRetake.addEventListener('click', () => {
     if (recUrl) { URL.revokeObjectURL(recUrl); recUrl = null; }
-    recBlob = null; recChunks = []; recDur = 0;
-    recPreview.pause();
-    recPreview.removeAttribute('src');
-    recPreview.srcObject = null;
-    recPreview.load();
-    resetPreviewForLive(); // 复位静音，否则第二次拍摄会边拍边响
-    setRecUI('idle');
-    recTimerEl.textContent = '0:00 / ' + REC_MAX_LABEL;
+    recPreview.pause(); recPreview.removeAttribute('src'); recReviewFile = null; recReviewInput = null;
   });
-  if (recAlbum) recAlbum.addEventListener('click', openRecAlbum);
-  if (recClose) recClose.addEventListener('click', closeRec);
-  if (recOrientBtn) recOrientBtn.addEventListener('click', () => {
-    recOrient = recOrient === 'portrait' ? 'landscape' : 'portrait';
-    applyRecOrient();
-  });
-  const capVideoAlbum = $('#capVideoAlbum');
-  if (capVideoAlbum) capVideoAlbum.addEventListener('change', (e) => {
-    const f = e.target.files && e.target.files[0]; e.target.value = '';
-    if (!f) return;
-    const url = URL.createObjectURL(f);
-    SuiDB.storeMedia(f).then((d) => { d.kind = 'video'; d._url = url; d.dur = ''; addComposeMedia(d); });
-    closeRec();
-  });
+  // 系统相机 / 相册 返回的视频文件 → 进入预览
+  function bindVideoCapture(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', (e) => {
+      const f = e.target.files && e.target.files[0]; e.target.value = '';
+      if (!f) return;
+      showRecReview(f, id);
+    });
+  }
+  bindVideoCapture('capVideoBack');
+  bindVideoCapture('capVideoFront');
+  bindVideoCapture('capVideoAlbum');
 
   function compressImageFile(file) {
     return new Promise((resolve) => {
@@ -1801,7 +1767,7 @@
   if (s8reset) s8reset.addEventListener('click', () => {
     showConfirm('清空本地数据', '将删除你所有的手记与账单，且无法恢复。确定要清空吗？', () => {
       DB.clearAll(); renderAll(); showScreen('screen-8'); toast('已清空本地数据');
-    });
+    }, null, '确认清空', '取消');
   });
 
   // ---------- 屏4：月份切换（内联下拉）/ 汉堡菜单 / 左滑删除 ----------
