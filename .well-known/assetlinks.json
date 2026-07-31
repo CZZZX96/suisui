@@ -1,0 +1,18 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "work.codebuddy.app.app_321.twa",
+      "sha256_cert_fingerprints": ["E9:09:63:B5:18:6A:AB:D4:1D:C2:25:76:8B:BB:87:D0:8A:14:E6:56:64:6D:30:BD:C0:C5:38:FE:F3:F0:F0:AC"]
+    }
+  },
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "work.codebuddy.app.app_325.twa",
+      "sha256_cert_fingerprints": ["3A:BB:55:81:0E:9E:46:E7:0F:DC:8A:CB:D2:2B:2A:0C:49:84:96:08:21:5E:B5:42:1E:DE:A8:E3:6E:D1:F3:27"]
+    }
+  }
+]
