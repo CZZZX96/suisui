@@ -1,6 +1,6 @@
 // 随遂 App — 离线缓存 Service Worker
 // v2：网络优先拿最新 CSS/JS（避免「加装后看到的还是旧设计稿外壳」），离线时回退到缓存。
-const CACHE = 'suisui-pwa-v5';
+const CACHE = 'suisui-pwa-v6';
 const SHELL = [
   './',
   './index.html',
